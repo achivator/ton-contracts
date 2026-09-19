@@ -25,9 +25,17 @@ contract ChatPool with Deployable {
     }
 
     // ---- Deposit: jettons land on the pool's jetton wallet ----
-    // forwardPayload layout: ref(DepositVoucher cell) ++ 512-bit signature.
+    // Accepted forwardPayload shapes:
+    //   1) unwrapped: ref(DepositVoucher cell) ++ 512-bit signature
+    //   2) verbatim TEP-74 ref payload: 1 bit flag ++ ref(shape 1)
+    // Stock jetton wallets forward the transfer's forward_payload as-is
+    // (shape 2); cooperating wallets may deliver shape 1. The two are
+    // unambiguous: a valid shape 1 always carries 512 bits of signature.
     receive(msg: JettonTransferNotification) {
         let fp: Slice = msg.forwardPayload;
+        if (fp.bits() == 1 && fp.refs() == 1) {
+            fp = fp.loadRef().beginParse();
+        }
         let voucherCell: Cell = fp.loadRef();
         let signature: Slice = fp.loadBits(512);
         require(checkSignature(voucherCell.hash(), signature, self.backendPubKey),

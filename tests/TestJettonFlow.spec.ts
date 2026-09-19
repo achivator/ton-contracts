@@ -1,8 +1,8 @@
 import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox';
-import { beginCell, toNano } from '@ton/core';
+import { beginCell, storeMessage, toNano } from '@ton/core';
 import { keyPairFromSeed, KeyPair, sign } from '@ton/crypto';
 import { TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
-import { ChatPool, storeDepositVoucher } from '../wrappers/ChatPool';
+import { ChatPool, storeDepositVoucher, storeJettonTransferNotification } from '../wrappers/ChatPool';
 import '@ton/test-utils';
 
 // End-to-end wiring test: real jetton minter -> real jetton wallets -> real
@@ -114,6 +114,78 @@ describe('TestJetton flow', () => {
         expect(res.transactions).toHaveTransaction({ from: admin.address, to: adminWalletAddr, success: true });
         expect(res.transactions).toHaveTransaction({ from: adminWalletAddr, to: poolWalletAddr, success: true, deploy: true });
         expect(res.transactions).toHaveTransaction({ from: poolWalletAddr, to: pool.address, success: true });
+        expect(res.transactions).toHaveTransaction({ from: pool.address, to: master.address, success: true });
+
+        expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
+        expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
+        expect(await pool.getCurrentTier()).toEqual(TIER);
+        expect((await pool.getJettonWallet(minter.address))!.equals(poolWalletAddr)).toBe(true);
+    });
+
+    it('accepts a verbatim ref-wrapped payload (stock wallet behavior)', async () => {
+        const poolWalletAddr = await minter.getGetWalletAddress(pool.address);
+
+        const voucher = beginCell()
+            .store(
+                storeDepositVoucher({
+                    $$type: 'DepositVoucher',
+                    chatId: CHAT_ID,
+                    jettonMaster: minter.address,
+                    expectedJettonWallet: poolWalletAddr,
+                    tier: TIER,
+                    feeTon: FEE_TON,
+                    expiry: farFuture,
+                }),
+            )
+            .endCell();
+        const signature = sign(voucher.hash(), backend.secretKey);
+        const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
+        // What a stock TEP-74 wallet forwards verbatim: [1 bit][ref payloadCell].
+        const verbatimPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
+
+        const notification = beginCell()
+            .store(
+                storeJettonTransferNotification({
+                    $$type: 'JettonTransferNotification',
+                    queryId: 0n,
+                    amount: AMOUNT,
+                    sender: admin.address,
+                    forwardPayload: verbatimPayload,
+                }),
+            )
+            .endCell();
+
+        // The cooperating test wallet unwraps the payload at the notification
+        // hop, so a stock-style delivery is simulated with a raw message from
+        // the pool's own jetton wallet address.
+        const msgCell = beginCell()
+            .store(
+                storeMessage({
+                    info: {
+                        type: 'internal',
+                        ihrDisabled: true,
+                        bounce: true,
+                        bounced: false,
+                        src: poolWalletAddr,
+                        dest: pool.address,
+                        value: { coins: toNano('0.3') },
+                        ihrFee: 0n,
+                        forwardFee: 0n,
+                        createdAt: 0,
+                        createdLt: 0n,
+                    },
+                    body: notification,
+                }),
+            )
+            .endCell();
+
+        const res = await blockchain.sendMessage(msgCell);
+        dump(res, 'verbatim deposit');
+        expect(res.transactions).toHaveTransaction({
+            from: poolWalletAddr,
+            to: pool.address,
+            success: true,
+        });
         expect(res.transactions).toHaveTransaction({ from: pool.address, to: master.address, success: true });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);

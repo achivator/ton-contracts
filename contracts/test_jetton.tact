@@ -99,8 +99,8 @@ contract TestJettonWallet {
         if (msg.forwardTonAmount > 0) {
             // A deposit voucher + signature (513 bits) cannot ride inline in a
             // transfer body alongside two addresses, so it travels ref-wrapped
-            // as [1 bit][ref payload]. ChatPool parses the payload inline from
-            // the notification, so unwrap it here.
+            // as [1 bit][ref payload]. Unwrap it here and deliver the canonical
+            // form (ChatPool accepts both this and the verbatim ref-wrapped one).
             let fp: Slice = msg.forwardPayload;
             require(fp.loadUint(1) == 1, "expected a ref-wrapped forward payload");
             send(SendParameters{
