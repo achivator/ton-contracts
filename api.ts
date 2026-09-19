@@ -19,7 +19,7 @@ dotenv.config();
         endpoint: "https://sandbox-v4.tonhubapi.com", // Test-net
     });
 
-    let mnemonics = (process.env.mnemonics2 || "").toString();
+    let mnemonics = (process.env.mnemonics || "").toString();
     let keyPair = await mnemonicToPrivateKey(mnemonics.split(" "));
     let secretKey = keyPair.secretKey;
     let workchain = 0;

@@ -44,7 +44,12 @@ export async function run(provider: NetworkProvider) {
         )
         .endCell();
     const signature = sign(voucher.hash(), kp.secretKey);
-    const forwardPayload = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
+    // The 513-bit payload (voucher ref + 512-bit signature) cannot ride inline
+    // in a transfer body (two addresses + fixed fields leave no room), so it
+    // travels ref-wrapped as [1 bit][ref payload]; the jetton wallet unwraps it
+    // at the notification hop, which ChatPool parses inline.
+    const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
+    const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
 
     // forward TON must cover the fee forwarded to the master plus notification gas
     const forwardTonAmount = feeTon + toNano('0.15');
