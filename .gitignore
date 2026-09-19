@@ -4,3 +4,4 @@ build
 dist
 .DS_Store
 id_ed25519*
+.env
