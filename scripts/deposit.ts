@@ -46,8 +46,8 @@ export async function run(provider: NetworkProvider) {
     const signature = sign(voucher.hash(), kp.secretKey);
     // The 513-bit payload (voucher ref + 512-bit signature) cannot ride inline
     // in a transfer body (two addresses + fixed fields leave no room), so it
-    // travels ref-wrapped as [1 bit][ref payload]; the jetton wallet unwraps it
-    // at the notification hop, which ChatPool parses inline.
+    // travels ref-wrapped as [1 bit][ref payload]. ChatPool accepts both this
+    // verbatim form and an already-unwrapped notification payload.
     const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
     const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
 
