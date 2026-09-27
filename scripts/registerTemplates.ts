@@ -10,6 +10,8 @@ import { reqEnv } from './env';
 // Env: ACHIEVEMENT_REGISTRY, BACKEND_SECRET
 //      METADATA_BASE (default https://achivator.cc/metadata/items/v1/)
 //      ROYALTY_PERCENT (default 5, paid to the connected wallet)
+//      START_INDEX (default 0; resume an interrupted run from this file index,
+//      which must equal the registry's current templates count)
 //
 // Registers one template per built-in bot achievement (the ones with a
 // metadata file in miniapp/public/metadata/items/v1), as platform-wide
@@ -26,8 +28,13 @@ export async function run(provider: NetworkProvider) {
     const royaltyPercent = BigInt(process.env.ROYALTY_PERCENT ?? '5');
 
     const dir = path.resolve(__dirname, '../../miniapp/public/metadata/items/v1');
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+    const startIndex = Number(process.env.START_INDEX ?? '0');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort().slice(startIndex);
     const templates: Record<string, number> = {};
+    const registered = Number(await registry.getTemplatesCount());
+    if (registered !== startIndex) {
+        throw new Error(`registry has ${registered} templates, START_INDEX must match it (got ${startIndex})`);
+    }
 
     for (const file of files) {
         const bytes = fs.readFileSync(path.join(dir, file));
