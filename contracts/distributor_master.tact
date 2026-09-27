@@ -5,6 +5,8 @@ import "./chat_pool.tact";
 
 const MasterMinTonForStorage: Int = ton("0.05");
 const PoolDeployValue: Int = ton("0.1");
+// Master's own gas + forward fee for a CreatePool, paid by the caller.
+const CreatePoolGas: Int = ton("0.05");
 
 contract DistributorMaster with Deployable, Ownable {
     owner: Address;
@@ -18,14 +20,18 @@ contract DistributorMaster with Deployable, Ownable {
 
     // Deploy a ChatPool for a chat. Anyone may trigger creation; the pool
     // becomes useful only once the admin funds it (and thereby claims it).
+    // The caller pays the pool's initial balance and the gas, so repeated
+    // CreatePool calls cannot drain the master's fee balance. The pool keeps
+    // PoolDeployValue as its storage reserve (plain-TON deploy, no DeployOk
+    // echo back to the master); anything above it accrues to the master.
     receive(msg: CreatePool) {
+        require(context().value >= PoolDeployValue + CreatePoolGas, "attach at least 0.15 TON");
         let init: StateInit = self.poolInit(msg.chatId);
         send(SendParameters{
             to: contractAddress(init),
             value: PoolDeployValue,
             mode: SendPayGasSeparately,
             bounce: false,
-            body: Deploy{queryId: 0}.toCell(),
             code: init.code,
             data: init.data
         });

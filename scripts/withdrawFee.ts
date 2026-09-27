@@ -4,22 +4,20 @@ import { NetworkProvider } from '@ton/blueprint';
 import { reqEnv } from './env';
 import { confirmSend, lastTxLt } from './actors';
 
-// Env: MASTER_ADDRESS, CHAT_ID
+// Owner-only withdrawal of accumulated TON fees from the master.
+// Env: MASTER_ADDRESS, AMOUNT; TO (default: the connected wallet)
 export async function run(provider: NetworkProvider) {
     const masterAddr = Address.parse(reqEnv('MASTER_ADDRESS'));
-    const chatId = BigInt(reqEnv('CHAT_ID'));
+    const amount = toNano(reqEnv('AMOUNT'));
 
     const sender = provider.sender().address;
     if (!sender) throw new Error('Sender address is not defined');
+    const to = process.env.TO ? Address.parse(process.env.TO) : sender;
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
-    const poolAddr = await master.getPoolAddress(chatId);
-
     const prevLt = await lastTxLt(provider, sender);
-    await master.send(provider.sender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId });
+    await master.send(provider.sender(), { value: toNano('0.05') }, { $$type: 'WithdrawFee', amount, to });
 
-    console.log('ChatPool address:', poolAddr.toString());
-    await provider.waitForDeploy(poolAddr);
-    await confirmSend(provider, sender, prevLt, 'createPool');
-    console.log('Pool deployed for chat', chatId.toString());
+    console.log('Fee withdrawal sent:', amount.toString(), '->', to.toString());
+    await confirmSend(provider, sender, prevLt, 'withdrawFee');
 }

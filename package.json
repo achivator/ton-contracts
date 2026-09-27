@@ -4,7 +4,6 @@
     "scripts": {
         "start": "blueprint run",
         "build": "blueprint build",
-        "api": "npx ts-node api.ts",
         "test": "jest --verbose"
     },
     "devDependencies": {

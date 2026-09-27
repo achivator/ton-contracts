@@ -1,27 +1,28 @@
 import { Address, beginCell, toNano } from '@ton/core';
 import { keyPairFromSeed, sign } from '@ton/crypto';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
-import { ChatPool, storeClaimVoucher } from '../wrappers/ChatPool';
+import { ChatPool, storeAdminInitVoucher } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
 import { signVoucher, TAG } from '../wrappers/Vouchers';
 import { reqEnv } from './env';
 import { confirmSend, lastTxLt } from './actors';
 
-// Env: MASTER_ADDRESS, JETTON_MASTER, CHAT_ID, AMOUNT, NONCE, BACKEND_SECRET
-//      RECIPIENT (default: the connected wallet), EXPIRY (default now+3600)
+// Env: MASTER_ADDRESS, CHAT_ID, BACKEND_SECRET
+//      ADMIN (default: the connected wallet) - the wallet the voucher names
+//      EXPIRY (default now+3600)
 //
-// Submits a backend-signed ClaimVoucher to the pool. The sender pays the gas.
+// Submits a backend-signed AdminInitVoucher via SetAdmin. Init (slot empty):
+// the connected wallet must equal ADMIN - it claims its own slot. Rotation
+// (slot taken): the connected wallet must be the current pool admin; ADMIN
+// names the successor. The sender pays the gas.
 export async function run(provider: NetworkProvider) {
     const masterAddr = Address.parse(reqEnv('MASTER_ADDRESS'));
-    const jettonMaster = Address.parse(reqEnv('JETTON_MASTER'));
     const chatId = BigInt(reqEnv('CHAT_ID'));
-    const amount = toNano(reqEnv('AMOUNT'));
-    const nonce = BigInt(reqEnv('NONCE'));
     const kp = keyPairFromSeed(Buffer.from(reqEnv('BACKEND_SECRET'), 'hex'));
 
     const sender = provider.sender().address;
     if (!sender) throw new Error('Sender address is not defined');
-    const recipient = process.env.RECIPIENT ? Address.parse(process.env.RECIPIENT) : sender;
+    const admin = process.env.ADMIN ? Address.parse(process.env.ADMIN) : sender;
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
@@ -31,27 +32,25 @@ export async function run(provider: NetworkProvider) {
         : BigInt(Math.floor(Date.now() / 1000) + 3600);
     const voucher = beginCell()
         .store(
-            storeClaimVoucher({
-                $$type: 'ClaimVoucher',
+            storeAdminInitVoucher({
+                $$type: 'AdminInitVoucher',
                 chatId,
-                recipient,
-                jettonMaster,
-                amount,
-                nonce,
+                master: masterAddr,
+                admin,
                 expiry,
             }),
         )
         .endCell();
-    const signature = beginCell().storeBuffer(signVoucher(voucher, kp, TAG.Claim, poolAddr)).endCell();
+    const signature = beginCell().storeBuffer(signVoucher(voucher, kp, TAG.Admin, poolAddr)).endCell();
 
     const pool = provider.open(ChatPool.fromAddress(poolAddr));
     const prevLt = await lastTxLt(provider, sender);
     await pool.send(
         provider.sender(),
-        { value: toNano('0.15') },
-        { $$type: 'Claim', voucherCell: voucher, signature },
+        { value: toNano('0.05') },
+        { $$type: 'SetAdmin', voucherCell: voucher, signature },
     );
 
-    console.log('Claim sent:', amount.toString(), 'to', recipient.toString(), 'nonce', nonce.toString());
-    await confirmSend(provider, sender, prevLt, 'claim');
+    console.log('SetAdmin sent: voucher names', admin.toString(), 'from', sender.toString());
+    await confirmSend(provider, sender, prevLt, 'setAdmin');
 }

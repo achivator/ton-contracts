@@ -3,7 +3,9 @@ import { keyPairFromSeed, sign } from '@ton/crypto';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import { storeDepositVoucher, storeJettonTransfer } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
+import { signVoucher, TAG } from '../wrappers/Vouchers';
 import { reqEnv } from './env';
+import { confirmSend, lastTxLt } from './actors';
 
 // Env: MASTER_ADDRESS, JETTON_MASTER, CHAT_ID, AMOUNT, BACKEND_SECRET
 //      FEE_TON (default 0.1), TIER (default 0)
@@ -43,7 +45,7 @@ export async function run(provider: NetworkProvider) {
             }),
         )
         .endCell();
-    const signature = sign(voucher.hash(), kp.secretKey);
+    const signature = signVoucher(voucher, kp, TAG.Deposit, poolAddr);
     // The 513-bit payload (voucher ref + 512-bit signature) cannot ride inline
     // in a transfer body (two addresses + fixed fields leave no room), so it
     // travels ref-wrapped as [1 bit][ref payload]. ChatPool accepts both this
@@ -54,6 +56,7 @@ export async function run(provider: NetworkProvider) {
     // forward TON must cover the fee forwarded to the master plus notification gas
     const forwardTonAmount = feeTon + toNano('0.15');
 
+    const prevLt = await lastTxLt(provider, admin);
     await provider.sender().send({
         to: adminJettonWallet,
         value: forwardTonAmount + toNano('0.1'),
@@ -77,6 +80,7 @@ export async function run(provider: NetworkProvider) {
     console.log('  pool                 :', poolAddr.toString());
     console.log('  pool jetton wallet   :', expectedJettonWallet.toString());
     console.log('  admin jetton wallet  :', adminJettonWallet.toString());
+    await confirmSend(provider, admin, prevLt, 'deposit');
 }
 
 async function jettonWalletOf(

@@ -3,6 +3,7 @@ import { DistributorMaster } from '../wrappers/DistributorMaster';
 import { ChatPool } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
 import { reqEnv } from './env';
+import { confirmSend, lastTxLt } from './actors';
 
 // Env: MASTER_ADDRESS, JETTON_MASTER, CHAT_ID, AMOUNT
 //      TO (default: the connected wallet)
@@ -22,6 +23,7 @@ export async function run(provider: NetworkProvider) {
     const poolAddr = await master.getPoolAddress(chatId);
 
     const pool = provider.open(ChatPool.fromAddress(poolAddr));
+    const prevLt = await lastTxLt(provider, sender);
     await pool.send(
         provider.sender(),
         { value: toNano('0.15') },
@@ -29,4 +31,5 @@ export async function run(provider: NetworkProvider) {
     );
 
     console.log('Withdraw sent:', amount.toString(), '->', to.toString());
+    await confirmSend(provider, sender, prevLt, 'withdraw');
 }
