@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // Test jetton (TEP-74) for testnet E2E runs.
 //
-// NOT for production: minimal implementation, no mintable flag, no burn, no
-// admin controls beyond owner-only minting. It reuses the shared message
+// NOT for production: minimal implementation, no burn, no admin controls
+// beyond owner-only minting. It reuses the shared message
 // structs from distributor_messages.tact so transfers to/from ChatPool are
 // wire-compatible byte for byte.
 // ---------------------------------------------------------------------------
@@ -28,6 +28,23 @@ message(0xd53276db) Excesses {
 message(0x4d494e54) Mint {               // "MINT"
     amount: Int as coins;
     recipient: Address;
+}
+
+// TEP-74 getter results. Tact flattens a struct returned by a getter onto
+// the stack, which is the layout wallets, explorers and the miniapp expect.
+struct JettonData {
+    totalSupply: Int;
+    mintable: Bool;
+    adminAddress: Address;
+    content: Cell;
+    walletCode: Cell;
+}
+
+struct JettonWalletData {
+    balance: Int;
+    owner: Address;
+    master: Address;
+    walletCode: Cell;
 }
 
 contract TestJettonMinter with Deployable, Ownable {
@@ -73,6 +90,17 @@ contract TestJettonMinter with Deployable, Ownable {
 
     get fun mintedTotal(): Int {
         return self.totalSupply;
+    }
+
+    // TEP-74: read by wallets (Tonkeeper) and by the miniapp for decimals.
+    get fun get_jetton_data(): JettonData {
+        return JettonData{
+            totalSupply: self.totalSupply,
+            mintable: true,
+            adminAddress: self.owner,
+            content: self.content,
+            walletCode: self.walletInit(myAddress()).code
+        };
     }
 }
 
@@ -172,5 +200,15 @@ contract TestJettonWallet {
 
     get fun masterAddress(): Address {
         return self.jettonMaster;
+    }
+
+    // TEP-74: lets wallets show the balance.
+    get fun get_wallet_data(): JettonWalletData {
+        return JettonWalletData{
+            balance: self.balance,
+            owner: self.owner,
+            master: self.jettonMaster,
+            walletCode: initOf TestJettonWallet(self.owner, self.jettonMaster).code
+        };
     }
 }

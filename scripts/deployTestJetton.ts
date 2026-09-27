@@ -1,5 +1,5 @@
-import { beginCell, toNano } from '@ton/core';
-import { TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
+import { toNano } from '@ton/core';
+import { onchainJettonContent, TEST_JETTON_CONTENT, TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
 import { NetworkProvider } from '@ton/blueprint';
 
 // Deploys the TEP-74 test jetton (testnet only) and mints an initial supply
@@ -11,10 +11,8 @@ export async function run(provider: NetworkProvider) {
     if (!owner) throw new Error('Owner address is not defined');
     const mintAmount = toNano(process.env.MINT_AMOUNT ?? '1000000');
 
-    const content = beginCell()
-        .storeUint(0, 8)
-        .storeStringTail('achivator test jetton (testnet only)')
-        .endCell();
+    // TEP-64 on-chain metadata so wallets and the miniapp read name/decimals
+    const content = onchainJettonContent(TEST_JETTON_CONTENT);
 
     const minter = provider.open(await TestJettonMinter.fromInit(owner, content));
     await minter.send(provider.sender(), { value: toNano('0.05') }, { $$type: 'Deploy', queryId: 0n });

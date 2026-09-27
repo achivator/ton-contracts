@@ -348,3 +348,43 @@ describe('TestJetton flow', () => {
         expect(await pool.getBalanceOf(minter.address)).toEqual(toNano('60'));
     });
 });
+
+describe('TestJetton TEP-74 getters', () => {
+    it('exposes get_jetton_data / get_wallet_data with a flat stack and TEP-64 decimals', async () => {
+        const { Dictionary } = await import('@ton/core');
+        const { sha256_sync } = await import('@ton/crypto');
+        const { onchainJettonContent, TEST_JETTON_CONTENT } = await import('../wrappers/TestJetton');
+
+        const blockchain = await Blockchain.create();
+        const owner = await blockchain.treasury('owner');
+        const minter = blockchain.openContract(
+            await TestJettonMinter.fromInit(owner.address, onchainJettonContent(TEST_JETTON_CONTENT)),
+        );
+        await minter.send(owner.getSender(), { value: toNano('0.05') }, { $$type: 'Deploy', queryId: 0n });
+        await minter.send(owner.getSender(), { value: toNano('0.2') }, {
+            $$type: 'Mint',
+            amount: toNano('123'),
+            recipient: owner.address,
+        });
+
+        const data = await blockchain.runGetMethod(minter.address, 'get_jetton_data');
+        expect(data.exitCode).toBe(0);
+        expect(data.stack).toHaveLength(5);
+        const r = data.stackReader;
+        expect(r.readBigNumber()).toBe(toNano('123'));
+        expect(r.readBigNumber()).toBe(-1n); // mintable
+        expect(r.readAddress().equals(owner.address)).toBe(true);
+        const content = r.readCell().beginParse();
+        expect(content.loadUint(8)).toBe(0);
+        const dict = content.loadDict(Dictionary.Keys.BigUint(256), Dictionary.Values.Cell());
+        const decimals = dict.get(BigInt('0x' + sha256_sync('decimals').toString('hex')))!.beginParse();
+        expect(decimals.loadUint(8)).toBe(0);
+        expect(decimals.loadStringTail()).toBe('9');
+
+        const walletAddr = await minter.getGetWalletAddress(owner.address);
+        const wdata = await blockchain.runGetMethod(walletAddr, 'get_wallet_data');
+        expect(wdata.exitCode).toBe(0);
+        expect(wdata.stack).toHaveLength(4);
+        expect(wdata.stackReader.readBigNumber()).toBe(toNano('123'));
+    });
+});
