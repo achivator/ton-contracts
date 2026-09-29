@@ -12,9 +12,11 @@ const PoolClaimStorageFee: Int = ton("0.002");
 // first claim of the day. Caps what a leaked backend key can drain per day.
 const DefaultDailyClaimPercent: Int = 10;
 const ClaimDay: Int = 86400;
-// Gas the notification itself burns on top of the forwarded platform fee.
-// Must be covered by the depositor's forward_ton_amount, never by the pool.
+// Gas of the deposit notification. Must be covered by the depositor's
+// forward_ton_amount, never by the pool; whatever is left goes back.
 const PoolDepositGas: Int = ton("0.02");
+// raw_reserve mode: reserve at most the amount (never fail on a low balance)
+const PoolReserveAtMost: Int = 2;
 
 // queryId of outbound JettonTransfers tells the bounce handler what to undo.
 // Claims use the voucher nonce, which is therefore limited to (0, 2^63).
@@ -29,7 +31,6 @@ contract ChatPool with Deployable {
     backendPubKey: Int as uint256;
 
     admin: Address?;                       // set via backend-signed SetAdmin (init/rotation)
-    tier: Int as uint16 = 0;
     balances: map<Address, Int>;           // jettonMaster -> credited amount (ledger)
     jettonWallets: map<Address, Address>;  // jettonMaster -> this pool's jetton wallet
     walletMasters: map<Address, Address>;  // reverse of jettonWallets, for bounces
@@ -86,8 +87,6 @@ contract ChatPool with Deployable {
         let vChatId: Int = vs.loadInt(64);
         let vJettonMaster: Address = vs.loadAddress();
         let vExpectedWallet: Address = vs.loadAddress();
-        let vTier: Int = vs.loadUint(16);
-        let vFeeTon: Int = vs.loadCoins();
         let vExpiry: Int = vs.loadUint(64);
         vs.endParse();
 
@@ -106,28 +105,19 @@ contract ChatPool with Deployable {
             || now() >= vExpiry
             || ctx.sender != vExpectedWallet
             || walletMismatch
-            // The platform fee and this handler's gas come out of the
-            // depositor's forward_ton_amount, never out of the pool balance.
-            || ctx.value < vFeeTon + PoolDepositGas) {
+            // This handler's gas comes out of the depositor's
+            // forward_ton_amount, never out of the pool balance.
+            || ctx.value < PoolDepositGas) {
             self.refundDeposit(msg);
             return;
         }
 
-        self.tier = vTier;
         self.jettonWallets.set(vJettonMaster, vExpectedWallet);
         self.walletMasters.set(vExpectedWallet, vJettonMaster);
         self.balances.set(vJettonMaster, self.balanceOrZero(vJettonMaster) + msg.amount);
 
-        // Forward the flat TON fee to the master.
-        if (vFeeTon > 0) {
-            send(SendParameters{
-                to: self.master,
-                value: vFeeTon,
-                mode: SendPayGasSeparately,
-                bounce: false,
-                body: CollectFee{chatId: self.chatId}.toCell()
-            });
-        }
+        // No fee: the forwarded TON beyond the gas goes back to the depositor.
+        self.refundExcess(ctx, msg.sender, msg.queryId);
     }
 
     // ---- SetAdmin: backend-signed voucher; init and rotation share the path.
@@ -157,6 +147,7 @@ contract ChatPool with Deployable {
             require(sender() == cur!!, "only the current admin may rotate");
         }
         self.admin = vAdmin;
+        self.refundExcess(context(), sender(), 0);
     }
 
     // ---- Claim: backend-signed voucher, recipient pays the gas ----
@@ -197,7 +188,7 @@ contract ChatPool with Deployable {
         self.balances.set(vJettonMaster, bal - vAmount);
         self.usedNonces.set(vNonce, true);
 
-        // Keep the storage fee, forward the rest of the claimer's TON.
+        // Keep the storage rent, forward the rest of the claimer's TON.
         nativeReserve(myBalance() - ctx.value + PoolClaimStorageFee, 0);
         self.sendJettons(wallet!!, vNonce, vAmount, vRecipient, SendRemainingBalance);
     }
@@ -278,6 +269,20 @@ contract ChatPool with Deployable {
         self.balances.set(jettonMaster!!, self.balanceOrZero(jettonMaster!!) + msg.amount);
     }
 
+    // Everything the incoming message brought beyond this transaction's gas
+    // goes back to `to`: the pool keeps its balance as it was, never more.
+    // Must be the handler's last action (mode 128 sends all unreserved TON).
+    fun refundExcess(ctx: Context, to: Address, queryId: Int) {
+        nativeReserve(myBalance() - ctx.value, PoolReserveAtMost);
+        send(SendParameters{
+            to: to,
+            value: 0,
+            mode: SendRemainingBalance + SendIgnoreErrors,
+            bounce: false,
+            body: TonExcesses{queryId: queryId}.toCell()
+        });
+    }
+
     fun refundDeposit(msg: JettonTransferNotification) {
         if (msg.amount > 0) {
             self.sendJettons(sender(), QueryRefund, msg.amount, msg.sender, SendRemainingValue);
@@ -285,7 +290,7 @@ contract ChatPool with Deployable {
     }
 
     // Outbound transfer funded by the incoming message: SendRemainingValue,
-    // or SendRemainingBalance after a nativeReserve that keeps a fee.
+    // or SendRemainingBalance after a nativeReserve that keeps the storage rent.
     fun sendJettons(wallet: Address, queryId: Int, amount: Int, to: Address, mode: Int) {
         send(SendParameters{
             to: wallet,
@@ -372,10 +377,6 @@ contract ChatPool with Deployable {
 
     get fun poolAdmin(): Address? {
         return self.admin;
-    }
-
-    get fun currentTier(): Int {
-        return self.tier;
     }
 
     get fun isNonceUsed(nonce: Int): Bool {

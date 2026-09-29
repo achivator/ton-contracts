@@ -24,7 +24,7 @@ import { reqEnv } from './env';
 //   expired        - validly signed, EXPIRY in the past            (AMOUNT, NONCE, EXPIRY)
 //   replay         - valid signature over an already-used nonce    (AMOUNT, NONCE, EXPIRY)
 //   cross_chat     - chat2 voucher submitted to the CHAT_ID pool   (VOUCHER_CHAT_ID, AMOUNT, NONCE)
-//   fake_notify    - forged JettonTransferNotification to the pool (AMOUNT, FEE_TON, TIER)
+//   fake_notify    - forged JettonTransferNotification to the pool (AMOUNT)
 //   junk_deposit   - junk ref payload in a real jetton transfer    (AMOUNT, FORWARD_TON)
 //   withdraw       - non-admin WithdrawRemainder                   (AMOUNT, TO)
 //   set_admin      - backend-signed AdminInitVoucher sent from the wrong
@@ -152,8 +152,6 @@ export async function run(provider: NetworkProvider) {
         }
         case 'fake_notify': {
             const amount = toNano(reqEnv('AMOUNT'));
-            const feeTon = toNano(process.env.FEE_TON ?? '0.1');
-            const tier = BigInt(process.env.TIER ?? '0');
             const voucher = beginCell()
                 .store(
                     storeDepositVoucher({
@@ -161,8 +159,6 @@ export async function run(provider: NetworkProvider) {
                         chatId,
                         jettonMaster,
                         expectedJettonWallet: poolJw,
-                        tier,
-                        feeTon,
                         expiry,
                     }),
                 )

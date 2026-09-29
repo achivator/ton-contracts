@@ -18,8 +18,6 @@ describe('TestJetton flow', () => {
     let pool: SandboxContract<ChatPool>;
 
     const CHAT_ID = 1001234567890n;
-    const TIER = 1n;
-    const FEE_TON = toNano('0.05');
     const AMOUNT = toNano('100');
     const farFuture = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
@@ -109,8 +107,6 @@ describe('TestJetton flow', () => {
                     chatId: CHAT_ID,
                     jettonMaster: minter.address,
                     expectedJettonWallet: poolWalletAddr,
-                    tier: TIER,
-                    feeTon: FEE_TON,
                     expiry: farFuture,
                 }),
             )
@@ -119,7 +115,7 @@ describe('TestJetton flow', () => {
         const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
         const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
 
-        const forwardTonAmount = FEE_TON + toNano('0.15');
+        const forwardTonAmount = toNano('0.15');
         const adminWallet = blockchain.openContract(TestJettonWallet.fromAddress(adminWalletAddr));
         const res = await adminWallet.send(
             admin.getSender(),
@@ -140,11 +136,12 @@ describe('TestJetton flow', () => {
         expect(res.transactions).toHaveTransaction({ from: admin.address, to: adminWalletAddr, success: true });
         expect(res.transactions).toHaveTransaction({ from: adminWalletAddr, to: poolWalletAddr, success: true, deploy: true });
         expect(res.transactions).toHaveTransaction({ from: poolWalletAddr, to: pool.address, success: true });
-        expect(res.transactions).toHaveTransaction({ from: pool.address, to: master.address, success: true });
+        // no fee: nothing reaches the master, the forwarded TON comes back
+        expect(res.transactions).not.toHaveTransaction({ from: pool.address, to: master.address });
+        expect(res.transactions).toHaveTransaction({ from: pool.address, to: admin.address, op: 0xd53276db, success: true });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
-        expect(await pool.getCurrentTier()).toEqual(TIER);
         expect((await pool.getJettonWallet(minter.address))!.equals(poolWalletAddr)).toBe(true);
     });
 
@@ -159,8 +156,6 @@ describe('TestJetton flow', () => {
                     chatId: CHAT_ID,
                     jettonMaster: minter.address,
                     expectedJettonWallet: poolWalletAddr,
-                    tier: TIER,
-                    feeTon: FEE_TON,
                     expiry: farFuture,
                 }),
             )
@@ -213,11 +208,12 @@ describe('TestJetton flow', () => {
             to: pool.address,
             success: true,
         });
-        expect(res.transactions).toHaveTransaction({ from: pool.address, to: master.address, success: true });
+        // no fee: nothing reaches the master, the forwarded TON comes back
+        expect(res.transactions).not.toHaveTransaction({ from: pool.address, to: master.address });
+        expect(res.transactions).toHaveTransaction({ from: pool.address, to: admin.address, op: 0xd53276db, success: true });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
-        expect(await pool.getCurrentTier()).toEqual(TIER);
         expect((await pool.getJettonWallet(minter.address))!.equals(poolWalletAddr)).toBe(true);
     });
 
@@ -259,8 +255,6 @@ describe('TestJetton flow', () => {
                         chatId,
                         jettonMaster: minter.address,
                         expectedJettonWallet: await minter.getGetWalletAddress(pool.address),
-                        tier: TIER,
-                        feeTon: FEE_TON,
                         expiry: farFuture,
                     }),
                 )
@@ -270,7 +264,7 @@ describe('TestJetton flow', () => {
                 .storeUint(1, 1)
                 .storeRef(beginCell().storeRef(voucher).storeBuffer(signature).endCell())
                 .endCell();
-            const forwardTonAmount = FEE_TON + toNano('0.15');
+            const forwardTonAmount = toNano('0.15');
             return depositorWallet.send(
                 depositor.getSender(),
                 { value: forwardTonAmount + toNano('0.1') },

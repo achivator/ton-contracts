@@ -60,8 +60,6 @@ const boc = (c: Cell) => c.toBoc().toString('base64');
 
 describe('miniapp lib <-> contracts', () => {
     const CHAT_ID = 1001234567890n;
-    const TIER = 1n;
-    const FEE_TON = toNano('0.05');
     const AMOUNT = toNano('100');
     const CLAIM_AMOUNT = toNano('30');
     const FAR_FUTURE = BigInt(Math.floor(Date.now() / 1000) + 3600);
@@ -116,8 +114,6 @@ describe('miniapp lib <-> contracts', () => {
                     chatId: CHAT_ID,
                     jettonMaster,
                     expectedJettonWallet,
-                    tier: TIER,
-                    feeTon: FEE_TON,
                     expiry: FAR_FUTURE,
                 }),
             )
@@ -126,8 +122,6 @@ describe('miniapp lib <-> contracts', () => {
             chatId: CHAT_ID,
             jettonMaster,
             expectedJettonWallet,
-            tier: TIER,
-            feeTon: FEE_TON,
             expiry: FAR_FUTURE,
         });
         expect(boc(libDeposit)).toEqual(boc(genDeposit));
@@ -262,7 +256,7 @@ describe('miniapp lib <-> contracts', () => {
                     destination,
                     responseDestination: creator.address,
                     customPayload: null,
-                    forwardTonAmount: FEE_TON + toNano('0.15'),
+                    forwardTonAmount: toNano('0.15'),
                     forwardPayload,
                 }),
             )
@@ -271,7 +265,7 @@ describe('miniapp lib <-> contracts', () => {
             amount: AMOUNT,
             destination,
             responseDestination: creator.address,
-            forwardTonAmount: FEE_TON + toNano('0.15'),
+            forwardTonAmount: toNano('0.15'),
             forwardPayload,
         });
         expect(boc(libTransfer)).toEqual(boc(genTransfer));
@@ -290,8 +284,6 @@ describe('miniapp lib <-> contracts', () => {
                     chatId: NEGATIVE_CHAT_ID,
                     jettonMaster,
                     expectedJettonWallet,
-                    tier: TIER,
-                    feeTon: FEE_TON,
                     expiry: FAR_FUTURE,
                 }),
             )
@@ -300,8 +292,6 @@ describe('miniapp lib <-> contracts', () => {
             chatId: NEGATIVE_CHAT_ID,
             jettonMaster,
             expectedJettonWallet,
-            tier: TIER,
-            feeTon: FEE_TON,
             expiry: FAR_FUTURE,
         });
         expect(boc(libNegDeposit)).toEqual(boc(genNegDeposit));
@@ -384,15 +374,13 @@ describe('miniapp lib <-> contracts', () => {
             chatId: CHAT_ID,
             jettonMaster: minter.address,
             expectedJettonWallet: poolWalletAddr,
-            tier: TIER,
-            feeTon: FEE_TON,
             expiry: FAR_FUTURE,
         });
         const depositSignature: Buffer = voucherLib.signVoucher(depositVoucher, BACKEND_SECRET_HEX, {
             tag: TAGS.Deposit,
             target: pool.address,
         });
-        const forwardTonAmount = FEE_TON + toNano('0.15');
+        const forwardTonAmount = toNano('0.15');
 
         const depositRes = await blockchain.sendMessage(
             rawInternal(
@@ -424,16 +412,18 @@ describe('miniapp lib <-> contracts', () => {
             to: pool.address,
             success: true,
         });
-        // Deposit fee (TON) forwarded to the master.
+        // No fee: nothing reaches the master, the forwarded TON minus gas
+        // goes back to the creator.
+        expect(depositRes.transactions).not.toHaveTransaction({ from: pool.address, to: master.address });
         expect(depositRes.transactions).toHaveTransaction({
             from: pool.address,
-            to: master.address,
-            success: true,
+            to: creator.address,
+            op: 0xd53276db,
+            value: (v) => v! > toNano('0.1'),
         });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
         expect((await pool.getPoolAdmin())!.equals(creator.address)).toBe(true);
-        expect(await pool.getCurrentTier()).toEqual(TIER);
         expect((await pool.getJettonWallet(minter.address))!.equals(poolWalletAddr)).toBe(true);
 
         // --- 3. claim: lib-built claim message from the user's wallet.

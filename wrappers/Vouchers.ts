@@ -6,7 +6,7 @@ import { storeSignedVoucher } from './ChatPool';
 // SignedVoucher{tag, target, ^voucher} envelope, never the bare voucher cell
 // (see contracts/voucher.tact); target is the verifying contract.
 export const TAG = {
-    Deposit: 0x44455031n, // target = chat pool
+    Deposit: 0x44455032n, // "DEP2", target = chat pool
     Claim: 0x434c4d31n, // target = chat pool
     Admin: 0x41444d31n, // target = chat pool
     Register: 0x52454731n, // target = achievement registry

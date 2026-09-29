@@ -16,7 +16,7 @@ import { reqEnv } from './env';
 // Registers one template per built-in bot achievement (the ones with a
 // metadata file in miniapp/public/metadata/items/v1), as platform-wide
 // templates (chatId 0) owned by the connected wallet. Each registration
-// costs the 0.1 TON registry fee. Prints the ACHIEVEMENT_TEMPLATES value the
+// leaves 0.01 TON of storage rent on the registry. Prints the ACHIEVEMENT_TEMPLATES value the
 // miniapp needs to sign mint vouchers. Re-running skips nothing: only run it
 // once per registry.
 export async function run(provider: NetworkProvider) {

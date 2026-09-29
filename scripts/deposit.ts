@@ -8,7 +8,6 @@ import { reqEnv } from './env';
 import { confirmSend, lastTxLt } from './actors';
 
 // Env: MASTER_ADDRESS, JETTON_MASTER, CHAT_ID, AMOUNT, BACKEND_SECRET
-//      FEE_TON (default 0.1), TIER (default 0)
 //
 // Acts as the chat admin: sends a jetton transfer from the admin's own jetton
 // wallet to the pool, carrying a backend-signed DepositVoucher in the forward
@@ -18,8 +17,6 @@ export async function run(provider: NetworkProvider) {
     const jettonMaster = Address.parse(reqEnv('JETTON_MASTER'));
     const chatId = BigInt(reqEnv('CHAT_ID'));
     const amount = toNano(reqEnv('AMOUNT')); // assumes 9-decimal jetton
-    const feeTon = toNano(process.env.FEE_TON ?? '0.1');
-    const tier = BigInt(process.env.TIER ?? '0');
     const kp = keyPairFromSeed(Buffer.from(reqEnv('BACKEND_SECRET'), 'hex'));
 
     const admin = provider.sender().address;
@@ -39,8 +36,6 @@ export async function run(provider: NetworkProvider) {
                 chatId,
                 jettonMaster,
                 expectedJettonWallet,
-                tier,
-                feeTon,
                 expiry,
             }),
         )
@@ -53,8 +48,8 @@ export async function run(provider: NetworkProvider) {
     const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
     const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
 
-    // forward TON must cover the fee forwarded to the master plus notification gas
-    const forwardTonAmount = feeTon + toNano('0.15');
+    // forward TON covers the notification gas; the pool returns the rest
+    const forwardTonAmount = toNano('0.15');
 
     const prevLt = await lastTxLt(provider, admin);
     await provider.sender().send({

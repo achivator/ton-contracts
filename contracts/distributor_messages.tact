@@ -1,10 +1,13 @@
 // ---------------------------------------------------------------------------
 // Token Distribution Bot — shared messages & wire structs
 //
-// Architecture: DistributorMaster (registry + TON fee collection) deploys one
-// ChatPool per Telegram chat. Pools custody arbitrary third-party jettons,
+// Architecture: DistributorMaster (pool registry) deploys one ChatPool per
+// Telegram chat. Pools custody arbitrary third-party jettons,
 // credit deposits, pay out claims and let the chat admin withdraw the
 // remainder without any backend involvement.
+//
+// TON pays for gas and storage only: no contract here takes a platform fee,
+// and every handler returns what the sender attached beyond that.
 //
 // Trust model (hybrid):
 //   - off-chain backend tracks activity -> points, and signs vouchers;
@@ -41,7 +44,7 @@ message(0x7362d09c) JettonTransferNotification {
 //
 // Signatures are over a SignedVoucher envelope, never the bare voucher cell;
 // see voucher.tact for the domain separation rationale.
-const VoucherTagDeposit: Int = 0x44455031;   // "DEP1", target = pool
+const VoucherTagDeposit: Int = 0x44455032;   // "DEP2", target = pool (DEP1 carried a fee)
 const VoucherTagClaim: Int = 0x434c4d31;     // "CLM1", target = pool
 const VoucherTagAdmin: Int = 0x41444d31;     // "ADM1", target = pool
 
@@ -51,8 +54,6 @@ struct DepositVoucher {
     chatId: Int as int64;
     jettonMaster: Address;
     expectedJettonWallet: Address;   // the pool's own jetton wallet (backend-derived)
-    tier: Int as uint16;             // chat-size tier, recomputed every deposit
-    feeTon: Int as coins;            // flat platform fee in TON for this tier
     expiry: Int as uint64;
 }
 
@@ -126,17 +127,7 @@ message RotateBackendKey {
     backendPubKey: Int as uint256;   // affects pools created afterwards
 }
 
-message SetFeeTier {
-    tier: Int as uint16;
-    depositFeeTon: Int as coins;
-}
-
-message WithdrawFee {
-    amount: Int as coins;
-    to: Address;
-}
-
-// pool -> master, carries the TON fee as message value
-message CollectFee {
-    chatId: Int as int64;
+// TEP-74 excess notification: carries TON back to whoever overpaid.
+message(0xd53276db) TonExcesses {
+    queryId: Int as uint64;
 }
