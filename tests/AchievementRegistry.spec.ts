@@ -106,15 +106,15 @@ describe('AchievementRegistry', () => {
         };
     }
 
-    it('registers a template for the named admin, keeps the fee and refunds the rest', async () => {
+    it('registers a template for the named admin, keeps only the storage rent and refunds the rest', async () => {
         const before = (await blockchain.getContract(registry.address)).balance;
         const res = await register(admin, registerVoucher(admin.address), { value: toNano('1') });
         expect(res.transactions).toHaveTransaction({ from: admin.address, to: registry.address, success: true });
         // overpayment comes back
         expect(res.transactions).toHaveTransaction({ from: registry.address, to: admin.address, success: true });
         const after = (await blockchain.getContract(registry.address)).balance;
-        expect(after - before).toBeGreaterThanOrEqual(toNano('0.099'));
-        expect(after - before).toBeLessThanOrEqual(toNano('0.1'));
+        expect(after - before).toBeGreaterThanOrEqual(toNano('0.009'));
+        expect(after - before).toBeLessThanOrEqual(toNano('0.01'));
 
         expect(await registry.getTemplatesCount()).toEqual(1n);
         const t = (await registry.getTemplate(0n))!;
@@ -163,13 +163,14 @@ describe('AchievementRegistry', () => {
         expect(await registry.getTemplatesCount()).toEqual(0n);
     });
 
-    it('rejects a zero royalty denominator, an oversized url and an underpaid fee', async () => {
+    it('rejects a zero royalty denominator, an oversized url and an underpaid registration', async () => {
         const v = registerVoucher(admin.address);
         const bad = [
             { royalty: royalty(admin.address, 0n, 0n) },
             { royalty: royalty(admin.address, 101n, 100n) },
             { contentUrl: 'https://x.io/' + 'a'.repeat(400) },
-            { value: toNano('0.1') },
+            // 0.05 < 0.01 rent + 0.05 gas
+            { value: toNano('0.05') },
         ];
         for (const overrides of bad) {
             const res = await register(admin, v, overrides);
@@ -277,45 +278,39 @@ describe('AchievementRegistry', () => {
         expect(await registry.getIsMinted(0n, -TG_USER)).toBe(true);
     });
 
-    // ---- audit regressions: fee withdrawal ----
+    // ---- no platform fee: nothing can be withdrawn ----
 
-    it('lets only the owner withdraw fees and keeps the storage reserve', async () => {
+    it('has no way to pay TON out, for the owner or anyone else', async () => {
         await register(admin, registerVoucher(admin.address));
+        const before = (await blockchain.getContract(registry.address)).balance;
+        for (const who of [owner, stranger]) {
+            const res = await who.send({
+                to: registry.address,
+                value: toNano('0.05'),
+                body: beginCell().storeUint(0x12345678, 32).storeCoins(toNano('0.01')).storeAddress(who.address).endCell(),
+            });
+            expect(res.transactions).toHaveTransaction({ from: who.address, to: registry.address, success: false });
+        }
+        expect((await blockchain.getContract(registry.address)).balance).toBeGreaterThanOrEqual(before);
+        // plain TON is accepted as a storage top-up
+        const topUp = await stranger.send({ to: registry.address, value: toNano('0.5') });
+        expect(topUp.transactions).toHaveTransaction({ from: stranger.address, to: registry.address, success: true });
+    });
 
-        const strangerWithdraw = await registry.send(
-            stranger.getSender(),
-            { value: toNano('0.05') },
-            { $$type: 'WithdrawFees', amount: toNano('0.01'), to: stranger.address },
-        );
-        expect(strangerWithdraw.transactions).toHaveTransaction({ from: stranger.address, to: registry.address, success: false });
-
-        // more than balance minus the storage reserve
-        const greedy = await registry.send(
-            owner.getSender(),
-            { value: toNano('0.05') },
-            { $$type: 'WithdrawFees', amount: toNano('10'), to: owner.address },
-        );
-        expect(greedy.transactions).toHaveTransaction({ from: owner.address, to: registry.address, success: false });
-
-        const res = await registry.send(
-            owner.getSender(),
-            { value: toNano('0.05') },
-            { $$type: 'WithdrawFees', amount: toNano('0.02'), to: owner.address },
-        );
-        expect(res.transactions).toHaveTransaction({
-            from: registry.address,
-            to: owner.address,
-            value: toNano('0.02'),
-            success: true,
-        });
-        expect((await blockchain.getContract(registry.address)).balance).toBeGreaterThanOrEqual(toNano('0.05'));
+    it('keeps only the storage rent of a mint', async () => {
+        await register(admin, registerVoucher(admin.address));
+        const before = (await blockchain.getContract(registry.address)).balance;
+        await registry.send(member.getSender(), { value: toNano('1') }, mintVoucher(0n, 1n));
+        const after = (await blockchain.getContract(registry.address)).balance;
+        expect(after - before).toBeGreaterThanOrEqual(toNano('0.003'));
+        expect(after - before).toBeLessThanOrEqual(toNano('0.004'));
     });
 
     // ---- audit regressions: mint payment and voucher validity ----
 
-    it('refuses a mint that does not cover fee + item value + gas', async () => {
+    it('refuses a mint that does not cover rent + item value + gas', async () => {
         await register(admin, registerVoucher(admin.address));
-        // 0.1 < 0.01 fee + 0.05 item + 0.05 gas
+        // 0.1 < 0.004 rent + 0.05 item + 0.05 gas
         const res = await registry.send(member.getSender(), { value: toNano('0.1') }, mintVoucher(0n, 1n));
         expect(res.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });
         expect(await registry.getItemsCount()).toEqual(0n);

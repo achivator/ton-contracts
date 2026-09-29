@@ -7,7 +7,8 @@ import { NetworkProvider } from '@ton/blueprint';
 //      COLLECTION_URL (default https://achivator.cc/metadata/collection.json)
 //
 // Deploys the AchievementRegistry (the TEP-62 collection of all achievement
-// NFTs). The connected wallet becomes the owner, i.e. the fee recipient.
+// NFTs). The connected wallet becomes the TEP-62 collection owner; the
+// registry takes no fee and pays no TON out.
 export async function run(provider: NetworkProvider) {
     const owner = provider.sender().address;
     if (!owner) throw new Error('Owner address is not defined');

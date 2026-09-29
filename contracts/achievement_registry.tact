@@ -4,12 +4,15 @@ import "@stdlib/content";
 import "./achievement_messages.tact";
 import "./achievement_item.tact";
 
-const RegisterFee: Int = ton("0.1");      // platform earnings per template
-const MintFee: Int = ton("0.01");         // platform earnings per mint
+// Storage rent the registry keeps for what a message adds to its state, so a
+// busy registry never rents itself into freezing (about 0.002 TON/year for a
+// template, 0.001 for the two map entries of a mint). Not a platform fee: no
+// one can take TON out of the registry.
+const RegisterStorageFee: Int = ton("0.01");
+const MintStorageFee: Int = ton("0.004");
 const MintItemValue: Int = ton("0.05");   // forwarded to the item: gas + storage
-const RegistryMinTonForStorage: Int = ton("0.05");
-// Registry gas per message, paid by the sender on top of the fees; whatever
-// is left over is refunded, so overpaying never silently tips the platform.
+// Registry gas per message, paid by the sender on top of the rent; whatever
+// is left over is refunded.
 const RegistryGas: Int = ton("0.05");
 // Metadata URL cap: at most two cells of the snake string (~250 bytes). The
 // URL lives in registry storage forever and every mint copies it.
@@ -17,9 +20,10 @@ const MaxContentUrlCells: Int = 2;
 
 // One global registry of per-chat achievement templates. The backend signs
 // vouchers (who is a chat admin, who earned what); the contract enforces
-// signatures, per-user-per-template uniqueness and fees. Fees accrue on the
-// balance; the owner (platform) withdraws them minus a storage reserve.
-// The owner has no moderation power: it is only the fee recipient.
+// signatures and per-user-per-template uniqueness. It takes no fee and has no
+// way to pay TON out: the sender covers gas and the storage rent of what they
+// add, and gets the rest back. The owner is only the TEP-62 collection owner,
+// with no moderation power.
 contract AchievementRegistry with Deployable, Ownable {
     owner: Address;
     backendPubKey: Int as uint256;
@@ -36,6 +40,9 @@ contract AchievementRegistry with Deployable, Ownable {
         self.backendPubKey = backendPubKey;
         self.collectionContent = collectionContent;
     }
+
+    // Storage rent top-ups.
+    receive() {}
 
     // ---- RegisterTemplate: the chat admin defines an achievement ----
     receive(msg: RegisterTemplate) {
@@ -55,7 +62,7 @@ contract AchievementRegistry with Deployable, Ownable {
         require(msg.royalty.denominator > 0, "royalty denominator is zero");
         require(msg.royalty.numerator <= msg.royalty.denominator, "royalty numerator exceeds denominator");
         require(self.snakeCells(msg.contentUrl.asSlice()) <= MaxContentUrlCells, "content url too long");
-        require(ctx.value >= RegisterFee + RegistryGas, "insufficient value: registration fee");
+        require(ctx.value >= RegisterStorageFee + RegistryGas, "insufficient value for registration");
 
         self.templates.set(self.nextTemplateId, Template{
             chatId: vChatId,
@@ -68,7 +75,7 @@ contract AchievementRegistry with Deployable, Ownable {
         emit(TemplateRegistered{templateId: self.nextTemplateId, chatId: vChatId, creator: ctx.sender}.toCell());
         self.nextTemplateId = self.nextTemplateId + 1;
 
-        self.keepFeeRefundRest(ctx, RegisterFee);
+        self.keepRentRefundRest(ctx, RegisterStorageFee);
     }
 
     // ---- MintAchievement: the recipient claims an earned achievement ----
@@ -96,7 +103,7 @@ contract AchievementRegistry with Deployable, Ownable {
         let userKey: Int = vTemplateId * 18446744073709551616 + (vTgUserId & 18446744073709551615);
         require(self.mintedUsers.get(userKey) == null, "achievement already minted for this user");
 
-        require(ctx.value >= MintFee + MintItemValue + RegistryGas, "insufficient value for mint");
+        require(ctx.value >= MintStorageFee + MintItemValue + RegistryGas, "insufficient value for mint");
 
         let t: Template = tmpl!!;
         // custom_payload: royalty inline + content cell (TEP-64 off-chain) as ref
@@ -108,8 +115,8 @@ contract AchievementRegistry with Deployable, Ownable {
             .endCell();
 
         // Reserve first so the item's value and the refund below come out of
-        // the incoming message, never out of accrued fees.
-        nativeReserve(myBalance() - ctx.value + MintFee, 0);
+        // the incoming message, never out of the registry's rent balance.
+        nativeReserve(myBalance() - ctx.value + MintStorageFee, 0);
         let itemInit: StateInit = initOf AchievementItem(myAddress(), self.nextItemIndex);
         send(SendParameters{
             to: contractAddress(itemInit),
@@ -144,10 +151,10 @@ contract AchievementRegistry with Deployable, Ownable {
         self.refundRest(ctx);
     }
 
-    // Keep `fee` out of the incoming value and return the rest to the sender.
-    // Must be the last action of the handler (see refundRest).
-    fun keepFeeRefundRest(ctx: Context, fee: Int) {
-        nativeReserve(myBalance() - ctx.value + fee, 0);
+    // Keep `rent` out of the incoming value and return the rest to the
+    // sender. Must be the last action of the handler (see refundRest).
+    fun keepRentRefundRest(ctx: Context, rent: Int) {
+        nativeReserve(myBalance() - ctx.value + rent, 0);
         self.refundRest(ctx);
     }
 
@@ -172,18 +179,6 @@ contract AchievementRegistry with Deployable, Ownable {
             n = n + 1;
         }
         return n;
-    }
-
-    // ---- Fee withdrawal: platform earnings only, storage stays ----
-    receive(msg: WithdrawFees) {
-        self.requireOwner();
-        require(msg.amount <= myBalance() - RegistryMinTonForStorage, "insufficient fee balance");
-        send(SendParameters{
-            to: msg.to,
-            value: msg.amount,
-            mode: SendPayGasSeparately,
-            bounce: false
-        });
     }
 
     // ---- Getters ----

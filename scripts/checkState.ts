@@ -19,7 +19,6 @@ export async function run(provider: NetworkProvider) {
     const pool = provider.open(ChatPool.fromAddress(poolAddr));
 
     const poolAdmin = await pool.getPoolAdmin();
-    const tier = await pool.getCurrentTier();
     const poolBal = await pool.getBalanceOf(jettonMaster);
     const poolWallet = await pool.getJettonWallet(jettonMaster);
 
@@ -38,7 +37,6 @@ export async function run(provider: NetworkProvider) {
 
     console.log('pool         :', poolAddr.toString());
     console.log('  poolAdmin  :', poolAdmin ? poolAdmin.toString() : 'null');
-    console.log('  tier       :', tier.toString());
     console.log('  balanceOf  :', poolBal.toString());
     console.log('  jettonWal  :', poolWallet ? poolWallet.toString() : 'null');
     console.log('  TON        :', poolTon.toString());

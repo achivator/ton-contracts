@@ -4,10 +4,8 @@
 // Architecture: one global AchievementRegistry stores achievement templates
 // (admin-defined, per Telegram chat) and mints TEP-62 items on backend
 // vouchers, mirroring the ChatPool trust model: the backend attests
-// eligibility off-chain, the contract enforces signatures, uniqueness and
-// fees. Registration and mint fees simply accrue to the registry balance;
-// the platform owner withdraws them minus a storage reserve
-// (DistributorMaster fee pattern).
+// eligibility off-chain, the contract enforces signatures and uniqueness.
+// No fees: senders pay gas and the storage rent of what they add.
 //
 // Content model: a template carries a metadata URL (admin-hosted or IPFS)
 // plus a SHA-256 over the content bytes. The hash is the anchor — a dead
@@ -97,11 +95,6 @@ message RegisterTemplate {
 message MintAchievement {
     voucherCell: Cell;               // serialised MintVoucher
     signature: Slice as remaining;   // 512-bit ed25519, see SignedVoucher
-}
-
-message WithdrawFees {
-    amount: Int as coins;
-    to: Address;
 }
 
 // ---- Wire structs (signed-cell layouts; MUST stay in sync with the manual

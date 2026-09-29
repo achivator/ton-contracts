@@ -342,7 +342,7 @@ BP_LOG=$TMP/bp-attack-replay.log bp attack "WALLET_MNEMONIC=$MEMBER2_MN" \
 say "phase 6: ATTACKER forges a deposit notification to pool1"
 BP_LOG=$TMP/bp-attack-fake_notify.log bp attack "WALLET_MNEMONIC=$ATTACKER_MN" \
     MODE=fake_notify "MASTER_ADDRESS=$MASTER" "JETTON_MASTER=$JM" \
-    "CHAT_ID=$CHAT1" "AMOUNT=$ATTACK1" "FEE_TON=0.1" "TIER=0" "EXPIRY=$EXPIRY_S"
+    "CHAT_ID=$CHAT1" "AMOUNT=$ATTACK1" "EXPIRY=$EXPIRY_S"
 
 say "phase 7: withdrawal attempts by the ATTACKER on both pools (both rejected)"
 BP_LOG=$TMP/bp-attack-withdraw1.log bp attack "WALLET_MNEMONIC=$ATTACKER_MN" \
