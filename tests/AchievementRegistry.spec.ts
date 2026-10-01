@@ -280,6 +280,10 @@ describe('AchievementRegistry', () => {
 
     // ---- no platform fee: nothing can be withdrawn ----
 
+    it('reports the protocol version', async () => {
+        expect(await registry.getVersion()).toEqual(2n);
+    });
+
     it('has no way to pay TON out, for the owner or anyone else', async () => {
         await register(admin, registerVoucher(admin.address));
         const before = (await blockchain.getContract(registry.address)).balance;

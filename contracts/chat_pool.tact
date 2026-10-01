@@ -417,4 +417,8 @@ contract ChatPool with Deployable {
     get fun backendKey(): Int {
         return self.backendPubKey;
     }
+
+    get fun version(): Int {
+        return ProtocolVersion;
+    }
 }

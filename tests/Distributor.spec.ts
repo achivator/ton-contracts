@@ -276,6 +276,10 @@ describe('Token Distribution', () => {
         expectRefund(res, toNano('1000'));
     });
 
+    it('reports the protocol version the backend checks before signing', async () => {
+        expect(await pool.getVersion()).toEqual(2n);
+    });
+
     it('pays out a valid claim and blocks nonce replay', async () => {
         await deposit(toNano('1000'));
 
@@ -1045,6 +1049,10 @@ describe('DistributorMaster', () => {
             { $$type: 'Deploy', queryId: 0n },
         );
         expect(dep.transactions).toHaveTransaction({ to: masterC.address, deploy: true, success: true });
+    });
+
+    it('reports the protocol version', async () => {
+        expect(await masterC.getVersion()).toEqual(2n);
     });
 
     it('derives a deterministic, chat-specific pool address', async () => {
