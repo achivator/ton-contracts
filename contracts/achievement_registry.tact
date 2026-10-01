@@ -190,6 +190,10 @@ contract AchievementRegistry with Deployable, Ownable {
         return self.nextTemplateId;
     }
 
+    get fun version(): Int {
+        return ProtocolVersion;
+    }
+
     get fun itemsCount(): Int {
         return self.nextItemIndex;
     }

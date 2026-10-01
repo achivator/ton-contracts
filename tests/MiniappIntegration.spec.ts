@@ -28,6 +28,7 @@ import { signVoucher, TAG } from './helpers/vouchers';
 // generated bindings and must be accepted by the real contracts in sandbox.
 const voucherLib: any = require('../../miniapp/src/lib/ton/vouchers.js');
 const TAGS: Record<string, number> = require('../../miniapp/src/lib/ton/constants.js').VOUCHER_TAG;
+const CONTRACTS_VERSION: number = require('../../miniapp/src/lib/ton/constants.js').CONTRACTS_VERSION;
 
 const BACKEND_SEED = Buffer.alloc(32, 7);
 const BACKEND_SECRET_HEX = BACKEND_SEED.toString('hex');
@@ -99,6 +100,12 @@ describe('miniapp lib <-> contracts', () => {
             recipient: creator.address,
         });
         expect(mintRes.transactions).toHaveTransaction({ to: minter.address, success: true });
+    });
+
+    // The miniapp refuses to sign deposit vouchers for a pool of another
+    // version; both sides must move together.
+    it('speaks the protocol version the miniapp signs for', async () => {
+        expect(await master.getVersion()).toEqual(BigInt(CONTRACTS_VERSION));
     });
 
     it('builds byte-identical cells to the generated bindings', async () => {

@@ -78,4 +78,8 @@ contract DistributorMaster with Deployable, Ownable {
     get fun backendKey(): Int {
         return self.backendPubKey;
     }
+
+    get fun version(): Int {
+        return ProtocolVersion;
+    }
 }

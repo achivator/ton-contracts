@@ -17,6 +17,13 @@ struct SignedVoucher {
     voucher: Cell;                   // the voucher cell itself (as a ref)
 }
 
+// Version of the protocol this code speaks: the voucher layouts and the
+// fees. Every contract reports it through `version()`, so the backend can
+// refuse to sign a voucher a contract would reject (contracts are immutable,
+// an old pool keeps its old layouts). 1 is implied for contracts without the
+// getter (the DEP1 deposit voucher with a fee); 2 dropped every TON fee.
+const ProtocolVersion: Int = 2;
+
 // Hash the backend signs for a voucher of kind `tag` addressed to `target`.
 fun signedVoucherHash(tag: Int, target: Address, voucher: Cell): Int {
     return beginCell()
