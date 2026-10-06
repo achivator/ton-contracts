@@ -3,7 +3,9 @@ import type { Config } from 'jest';
 const config: Config = {
     preset: 'ts-jest',
     testEnvironment: 'node',
-    testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+    // tests/poc holds security-review PoCs that assert the issues exist; run
+    // them with `npm run test:poc`.
+    testPathIgnorePatterns: ['/node_modules/', '/dist/', '/tests/poc/'],
     // MiniappIntegration.spec.ts requires the miniapp voucher lib (plain CJS
     // that requires @ton/core + @ton/crypto on its own). Pin those to this
     // package so the lib and the sandbox share a single copy of the
