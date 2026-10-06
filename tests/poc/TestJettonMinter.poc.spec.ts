@@ -31,7 +31,11 @@ describe('TestJettonMinter PoC', () => {
     });
 
     it('TJM-1: no get_jetton_data (TEP-74) on master, no get_wallet_data on wallet', async () => {
-        await minter.send(owner.getSender(), { value: toNano('0.2') }, { $$type: 'Mint', amount: 1n, recipient: alice.address });
+        await minter.send(
+            owner.getSender(),
+            { value: toNano('0.2') },
+            { $$type: 'Mint', amount: 1n, recipient: alice.address },
+        );
         let masterErr: any = null;
         try {
             const r = await blockchain.runGetMethod(minter.address, 'get_jetton_data');
@@ -55,13 +59,27 @@ describe('TestJettonMinter PoC', () => {
         const r = await alice.send({
             to: minter.address,
             value: toNano('0.1'),
-            body: beginCell().storeUint(0x2c76b973, 32).storeUint(0, 64).storeAddress(alice.address).storeBit(false).endCell(),
+            body: beginCell()
+                .storeUint(0x2c76b973, 32)
+                .storeUint(0, 64)
+                .storeAddress(alice.address)
+                .storeBit(false)
+                .endCell(),
         });
-        expect(r.transactions).toHaveTransaction({ from: alice.address, to: minter.address, success: false, exitCode: 130 });
+        expect(r.transactions).toHaveTransaction({
+            from: alice.address,
+            to: minter.address,
+            success: false,
+            exitCode: 130,
+        });
     });
 
     it('OK: get_wallet_address equals the actually deployed wallet and the sibling derivation', async () => {
-        const r = await minter.send(owner.getSender(), { value: toNano('0.2') }, { $$type: 'Mint', amount: 5n, recipient: alice.address });
+        const r = await minter.send(
+            owner.getSender(),
+            { value: toNano('0.2') },
+            { $$type: 'Mint', amount: 5n, recipient: alice.address },
+        );
         const expected = await minter.getGetWalletAddress(alice.address);
         const fromInit = (await TestJettonWallet.fromInit(alice.address, minter.address)).address;
         expect(expected.equals(fromInit)).toBe(true);
@@ -76,10 +94,18 @@ describe('TestJettonMinter PoC', () => {
         let found: bigint | null = null;
         for (let v = 2_000_000n; v <= 3_200_000n; v += 20_000n) {
             await blockchain.loadFrom(snap);
-            const r = await minter.send(owner.getSender(), { value: v }, { $$type: 'Mint', amount: toNano('1000'), recipient: alice.address });
+            const r = await minter.send(
+                owner.getSender(),
+                { value: v },
+                { $$type: 'Mint', amount: toNano('1000'), recipient: alice.address },
+            );
             const minterOk = r.transactions.some(
-                (t: any) => t.inMessage?.info.dest?.equals?.(minter.address) && t.description.type === 'generic' &&
-                    t.description.computePhase.type === 'vm' && t.description.computePhase.success && !t.description.aborted,
+                (t: any) =>
+                    t.inMessage?.info.dest?.equals?.(minter.address) &&
+                    t.description.type === 'generic' &&
+                    t.description.computePhase.type === 'vm' &&
+                    t.description.computePhase.success &&
+                    !t.description.aborted,
             );
             const total = await minter.getMintedTotal();
             const bal = await balanceOf(alice.address);
@@ -94,9 +120,18 @@ describe('TestJettonMinter PoC', () => {
     });
 
     it('TJM-3: mint excess TON goes to the recipient, not to the owner who paid', async () => {
-        const r = await minter.send(owner.getSender(), { value: toNano('0.5') }, { $$type: 'Mint', amount: 1n, recipient: alice.address });
+        const r = await minter.send(
+            owner.getSender(),
+            { value: toNano('0.5') },
+            { $$type: 'Mint', amount: 1n, recipient: alice.address },
+        );
         const w = await minter.getGetWalletAddress(alice.address);
-        expect(r.transactions).toHaveTransaction({ from: w, to: alice.address, op: 0xd53276db, value: (x) => x! > toNano('0.4') });
+        expect(r.transactions).toHaveTransaction({
+            from: w,
+            to: alice.address,
+            op: 0xd53276db,
+            value: (x) => x! > toNano('0.4'),
+        });
         expect(r.transactions).not.toHaveTransaction({ from: w, to: owner.address });
     });
 
@@ -107,18 +142,33 @@ describe('TestJettonMinter PoC', () => {
             body: beginCell().storeUint(0x819dbe99, 32).storeUint(0, 64).storeAddress(alice.address).endCell(),
         });
         expect(co.transactions).toHaveTransaction({ to: minter.address, success: false, exitCode: 130 });
-        const m = await minter.send(attacker.getSender(), { value: toNano('0.2') }, { $$type: 'Mint', amount: 1n, recipient: attacker.address });
+        const m = await minter.send(
+            attacker.getSender(),
+            { value: toNano('0.2') },
+            { $$type: 'Mint', amount: 1n, recipient: attacker.address },
+        );
         expect(m.transactions).toHaveTransaction({ to: minter.address, success: false, exitCode: 132 });
         expect(await minter.getMintedTotal()).toEqual(0n);
     });
 
     it('OK: totalSupply coins overflow reverts atomically (no wallet credit, bounce to owner)', async () => {
         const MAX = (1n << 120n) - 1n;
-        await minter.send(owner.getSender(), { value: toNano('0.2') }, { $$type: 'Mint', amount: MAX, recipient: alice.address });
+        await minter.send(
+            owner.getSender(),
+            { value: toNano('0.2') },
+            { $$type: 'Mint', amount: MAX, recipient: alice.address },
+        );
         expect(await minter.getMintedTotal()).toEqual(MAX);
-        const r = await minter.send(owner.getSender(), { value: toNano('0.2') }, { $$type: 'Mint', amount: 1n, recipient: attacker.address });
+        const r = await minter.send(
+            owner.getSender(),
+            { value: toNano('0.2') },
+            { $$type: 'Mint', amount: 1n, recipient: attacker.address },
+        );
         expect(r.transactions).toHaveTransaction({ to: minter.address, success: false });
-        expect(r.transactions).not.toHaveTransaction({ from: minter.address, to: await minter.getGetWalletAddress(attacker.address) });
+        expect(r.transactions).not.toHaveTransaction({
+            from: minter.address,
+            to: await minter.getGetWalletAddress(attacker.address),
+        });
         expect(await minter.getMintedTotal()).toEqual(MAX);
     });
 
@@ -126,8 +176,14 @@ describe('TestJettonMinter PoC', () => {
         const evil = blockchain.openContract(await TestJettonMinter.fromInit(attacker.address, content));
         await evil.send(attacker.getSender(), { value: toNano('0.05') }, { $$type: 'Deploy', queryId: 0n });
         const MAX = (1n << 120n) - 1n;
-        await evil.send(attacker.getSender(), { value: toNano('0.2') }, { $$type: 'Mint', amount: MAX, recipient: attacker.address });
-        const ew = blockchain.openContract(TestJettonWallet.fromAddress(await evil.getGetWalletAddress(attacker.address)));
+        await evil.send(
+            attacker.getSender(),
+            { value: toNano('0.2') },
+            { $$type: 'Mint', amount: MAX, recipient: attacker.address },
+        );
+        const ew = blockchain.openContract(
+            TestJettonWallet.fromAddress(await evil.getGetWalletAddress(attacker.address)),
+        );
         expect(await ew.getWalletBalance()).toEqual(MAX);
         // same code hash as the "official" test minter
         const a = (await blockchain.getContract(minter.address)).accountState as any;
@@ -141,24 +197,42 @@ describe('TestJettonMinter PoC', () => {
             await ChatPool.fromInit(owner.address, 1n, BigInt('0x' + backend.publicKey.toString('hex'))),
         );
         await pool.send(owner.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
-        const r = await minter.send(owner.getSender(), { value: toNano('0.3') }, { $$type: 'Mint', amount: toNano('10'), recipient: pool.address });
+        const r = await minter.send(
+            owner.getSender(),
+            { value: toNano('0.3') },
+            { $$type: 'Mint', amount: toNano('10'), recipient: pool.address },
+        );
         expect(r.transactions).toHaveTransaction({ to: pool.address, op: 0xd53276db, success: false, exitCode: 130 });
         expect(await balanceOf(pool.address)).toEqual(toNano('10'));
         expect(await pool.getBalanceOf(minter.address)).toEqual(0n);
     });
     it('TJM-2b (cross-ref wallet): inline forward payload burns tokens silently; mintedTotal never decreases', async () => {
-        await minter.send(owner.getSender(), { value: toNano('0.2') }, { $$type: 'Mint', amount: 100n, recipient: alice.address });
-        const aw = blockchain.openContract(TestJettonWallet.fromAddress(await minter.getGetWalletAddress(alice.address)));
+        await minter.send(
+            owner.getSender(),
+            { value: toNano('0.2') },
+            { $$type: 'Mint', amount: 100n, recipient: alice.address },
+        );
+        const aw = blockchain.openContract(
+            TestJettonWallet.fromAddress(await minter.getGetWalletAddress(alice.address)),
+        );
         // TEP-74-valid inline (Either bit 0) forward payload with forward_ton_amount > 0
-        const r = await aw.send(alice.getSender(), { value: toNano('0.2') }, {
-            $$type: 'JettonTransfer', queryId: 0n, amount: 40n, destination: attacker.address,
-            responseDestination: alice.address, customPayload: null, forwardTonAmount: toNano('0.01'),
-            forwardPayload: beginCell().storeBit(false).endCell(),
-        });
+        const r = await aw.send(
+            alice.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'JettonTransfer',
+                queryId: 0n,
+                amount: 40n,
+                destination: attacker.address,
+                responseDestination: alice.address,
+                customPayload: null,
+                forwardTonAmount: toNano('0.01'),
+                forwardPayload: beginCell().storeBit(false).endCell(),
+            },
+        );
         expect(r.transactions).toHaveTransaction({ from: aw.address, success: false, exitCode: 47577 });
         expect(await aw.getWalletBalance()).toEqual(60n);
         expect(await balanceOf(attacker.address)).toEqual(0n);
         expect(await minter.getMintedTotal()).toEqual(100n); // 40 tokens vanished, supply still counts them
     });
 });
-

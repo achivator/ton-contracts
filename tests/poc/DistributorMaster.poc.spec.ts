@@ -26,14 +26,43 @@ function adminVoucher(chatId: bigint, master: Address, admin: Address, kp: KeyPa
 
 function depositPayload(chatId: bigint, jm: Address, jw: Address, kp: KeyPair, pool: Address): Cell {
     const v = beginCell()
-        .store(storeDepositVoucher({ $$type: 'DepositVoucher', chatId, jettonMaster: jm, expectedJettonWallet: jw, expiry: farFuture() }))
+        .store(
+            storeDepositVoucher({
+                $$type: 'DepositVoucher',
+                chatId,
+                jettonMaster: jm,
+                expectedJettonWallet: jw,
+                expiry: farFuture(),
+            }),
+        )
         .endCell();
-    return beginCell().storeRef(v).storeBuffer(signVoucher(v, kp, TAG.Deposit, pool)).endCell();
+    return beginCell()
+        .storeRef(v)
+        .storeBuffer(signVoucher(v, kp, TAG.Deposit, pool))
+        .endCell();
 }
 
-function claimVoucher(chatId: bigint, recipient: Address, jm: Address, amount: bigint, nonce: bigint, kp: KeyPair, pool: Address) {
+function claimVoucher(
+    chatId: bigint,
+    recipient: Address,
+    jm: Address,
+    amount: bigint,
+    nonce: bigint,
+    kp: KeyPair,
+    pool: Address,
+) {
     const v = beginCell()
-        .store(storeClaimVoucher({ $$type: 'ClaimVoucher', chatId, recipient, jettonMaster: jm, amount, nonce, expiry: farFuture() }))
+        .store(
+            storeClaimVoucher({
+                $$type: 'ClaimVoucher',
+                chatId,
+                recipient,
+                jettonMaster: jm,
+                amount,
+                nonce,
+                expiry: farFuture(),
+            }),
+        )
         .endCell();
     return { voucherCell: v, signature: signVoucher(v, kp, TAG.Claim, pool) };
 }
@@ -56,7 +85,7 @@ describe('DistributorMaster PoC', () => {
         const viaStandalone = (await ChatPool.fromInit(m.address, CHAT_ID, pub(backend))).address;
         const viaMasterBuild = (await MasterChatPool.fromInit(m.address, CHAT_ID, pub(backend))).address;
         expect(viaMaster.equals(viaMasterBuild)).toBe(true);
-        expect(viaMaster.equals(viaStandalone)).toBe(false);   // standalone ChatPool wrapper derives a wrong address
+        expect(viaMaster.equals(viaStandalone)).toBe(false); // standalone ChatPool wrapper derives a wrong address
         const j = JSON.parse(fs.readFileSync(path.join(__dirname, '../../build/ChatPool.compiled.json'), 'utf8'));
         const standaloneCode = Cell.fromBoc(Buffer.from(j.hex, 'hex'))[0];
         await m.send(owner.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
@@ -96,7 +125,11 @@ describe('DistributorMaster PoC', () => {
         expect((await poolM.getPoolAdmin())!.equals(tester.address)).toBe(true);
         // the real admin is now locked out of the init path
         const av2 = adminVoucher(CHAT_ID, mM.address, realAdmin.address, backend, poolM.address);
-        const rReal = await poolM.send(realAdmin.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...av2 });
+        const rReal = await poolM.send(
+            realAdmin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetAdmin', ...av2 },
+        );
         expect(rReal.transactions).toHaveTransaction({ to: poolM.address, success: false });
 
         // (b) claim voucher signed for the testnet pool pays out on mainnet (same jetton master/wallet addresses)
@@ -106,20 +139,37 @@ describe('DistributorMaster PoC', () => {
         const adm = await mainnet2.treasury('realAdmin');
         await m2.send(adm.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
         const pool2 = mainnet2.openContract(ChatPool.fromAddress(await m2.getPoolAddress(CHAT_ID)));
-        await pool2.send(adm.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m2.address, adm.address, backend, pool2.address) });
+        await pool2.send(
+            adm.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m2.address, adm.address, backend, pool2.address) },
+        );
         const jw = await mainnet2.treasury('jettonWallet');
         const jm = new Address(0, Buffer.alloc(32, 3));
-        await pool2.send(jw.getSender(), { value: toNano('0.5') }, {
-            $$type: 'JettonTransferNotification', queryId: 0n, amount: toNano('1000'), sender: adm.address,
-            forwardPayload: depositPayload(CHAT_ID, jm, jw.address, backend, pool2.address),
-        });
+        await pool2.send(
+            jw.getSender(),
+            { value: toNano('0.5') },
+            {
+                $$type: 'JettonTransferNotification',
+                queryId: 0n,
+                amount: toNano('1000'),
+                sender: adm.address,
+                forwardPayload: depositPayload(CHAT_ID, jm, jw.address, backend, pool2.address),
+            },
+        );
         expect(await pool2.getBalanceOf(jm)).toEqual(toNano('1000'));
         // voucher produced against the TESTNET pool address
         const cv = claimVoucher(CHAT_ID, tester.address, jm, toNano('50'), 777n, backend, poolT.address);
         const attacker2 = await mainnet2.treasury('tester');
-        const rc = await pool2.send(attacker2.getSender(), { value: toNano('0.15') }, {
-            $$type: 'Claim', voucherCell: cv.voucherCell, signature: beginCell().storeBuffer(cv.signature).endCell(),
-        });
+        const rc = await pool2.send(
+            attacker2.getSender(),
+            { value: toNano('0.15') },
+            {
+                $$type: 'Claim',
+                voucherCell: cv.voucherCell,
+                signature: beginCell().storeBuffer(cv.signature).endCell(),
+            },
+        );
         expect(rc.transactions).toHaveTransaction({ from: pool2.address, to: jw.address, success: true });
         expect(await pool2.getBalanceOf(jm)).toEqual(toNano('950'));
     });
@@ -132,13 +182,21 @@ describe('DistributorMaster PoC', () => {
         await m.send(admin.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
         const oldPoolAddr = await m.getPoolAddress(CHAT_ID);
         const oldPool = bc.openContract(ChatPool.fromAddress(oldPoolAddr));
-        await oldPool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m.address, admin.address, backend, oldPoolAddr) });
+        await oldPool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m.address, admin.address, backend, oldPoolAddr) },
+        );
         expect((await oldPool.getPoolAdmin())!.equals(admin.address)).toBe(true);
 
         const next = keyPairFromSeed(Buffer.alloc(32, 8));
-        await m.send(owner.getSender(), { value: toNano('0.05') }, { $$type: 'RotateBackendKey', backendPubKey: pub(next) });
+        await m.send(
+            owner.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'RotateBackendKey', backendPubKey: pub(next) },
+        );
         const newPoolAddr = await m.getPoolAddress(CHAT_ID);
-        expect(newPoolAddr.equals(oldPoolAddr)).toBe(false);          // getter (used by the miniapp) now points elsewhere
+        expect(newPoolAddr.equals(oldPoolAddr)).toBe(false); // getter (used by the miniapp) now points elsewhere
         expect((await bc.getContract(newPoolAddr)).accountState?.type).not.toBe('active'); // and there is nothing there
         const r = await m.send(admin.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
         expect(r.transactions).toHaveTransaction({ from: m.address, to: newPoolAddr, deploy: true, success: true });
@@ -155,7 +213,11 @@ describe('DistributorMaster PoC', () => {
         const OTHER_CHAT = -1009999999999n;
         const officialOldAddr = await m.getPoolAddress(OTHER_CHAT); // what the master derived before rotation
         const next = keyPairFromSeed(Buffer.alloc(32, 8));
-        await m.send(owner.getSender(), { value: toNano('0.05') }, { $$type: 'RotateBackendKey', backendPubKey: pub(next) });
+        await m.send(
+            owner.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'RotateBackendKey', backendPubKey: pub(next) },
+        );
 
         // StateInit is public: deploy ChatPool(master, chat, LEAKED key) directly, with the master's own pool code
         const rogue = bc.openContract(await MasterChatPool.fromInit(m.address, OTHER_CHAT, pub(backend)));
@@ -200,13 +262,19 @@ describe('DistributorMaster PoC', () => {
         const t0 = Math.floor(Date.now() / 1000);
         for (const years of [1, 4, 14]) {
             bc.now = t0 + years * 365 * 86400;
-            const r = await m.send(user.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID + BigInt(years) });
+            const r = await m.send(
+                user.getSender(),
+                { value: toNano('0.3') },
+                { $$type: 'CreatePool', chatId: CHAT_ID + BigInt(years) },
+            );
             const tx = r.transactions.find((t) => t.inMessage?.info.dest?.toString() === m.address.toString());
             const d: any = tx!.description;
-            console.log(`DM-5 after ${years}y: aborted=${d.aborted} exit=${d.computePhase?.exitCode ?? d.computePhase?.type} ` +
-                `storageCollected=${d.storagePhase?.storageFeesCollected} due=${d.storagePhase?.storageFeesDue} ` +
-                `creditDue=${d.creditPhase?.dueFeesColelcted} status=${d.storagePhase?.statusChange} poolDeployed=${r.transactions.some((t) => (t.description as any).computePhase?.type === 'vm' && t.inMessage?.init != null && t !== tx)} ` +
-                `state=${(await bc.getContract(m.address)).accountState?.type}`);
+            console.log(
+                `DM-5 after ${years}y: aborted=${d.aborted} exit=${d.computePhase?.exitCode ?? d.computePhase?.type} ` +
+                    `storageCollected=${d.storagePhase?.storageFeesCollected} due=${d.storagePhase?.storageFeesDue} ` +
+                    `creditDue=${d.creditPhase?.dueFeesColelcted} status=${d.storagePhase?.statusChange} poolDeployed=${r.transactions.some((t) => (t.description as any).computePhase?.type === 'vm' && t.inMessage?.init != null && t !== tx)} ` +
+                    `state=${(await bc.getContract(m.address)).accountState?.type}`,
+            );
             if (years === 1) expect(d.storagePhase.storageFeesDue).toBeGreaterThan(0n); // debt never paid even with traffic
             if (years === 14) {
                 expect(d.aborted).toBe(true);
@@ -220,7 +288,11 @@ describe('DistributorMaster PoC', () => {
         const bc = await Blockchain.create();
         const owner = await bc.treasury('owner');
         const m = await deployMaster(bc, owner, pub(backend));
-        const body = beginCell().storeUint(0x819dbe99, 32).storeUint(0, 64).storeAddress((await bc.treasury('x')).address).endCell();
+        const body = beginCell()
+            .storeUint(0x819dbe99, 32)
+            .storeUint(0, 64)
+            .storeAddress((await bc.treasury('x')).address)
+            .endCell();
         const r = await owner.send({ to: m.address, value: toNano('0.05'), body });
         expect(r.transactions).toHaveTransaction({ to: m.address, success: false, exitCode: 130 });
     });
@@ -230,11 +302,19 @@ describe('DistributorMaster PoC', () => {
         const owner = await bc.treasury('owner');
         const admin = await bc.treasury('admin');
         const m = await deployMaster(bc, owner, pub(backend));
-        const r = await m.send(owner.getSender(), { value: toNano('0.05') }, { $$type: 'RotateBackendKey', backendPubKey: 0n });
+        const r = await m.send(
+            owner.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'RotateBackendKey', backendPubKey: 0n },
+        );
         expect(r.transactions).toHaveTransaction({ to: m.address, success: true });
         await m.send(admin.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
         const p = bc.openContract(ChatPool.fromAddress(await m.getPoolAddress(CHAT_ID)));
-        const s = await p.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m.address, admin.address, backend, p.address) });
+        const s = await p.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m.address, admin.address, backend, p.address) },
+        );
         expect(s.transactions).toHaveTransaction({ to: p.address, success: false });
     });
 
@@ -245,11 +325,18 @@ describe('DistributorMaster PoC', () => {
         const m = await deployMaster(bc, owner, pub(backend));
         bc.now = Math.floor(Date.now() / 1000) + 200 * 86400;
         const body = beginCell().storeUint(0x69873d03, 32).storeInt(CHAT_ID, 64).endCell();
-        const r = await bc.sendMessage(internal({ from: user.address, to: m.address, value: toNano('0.3'), body, bounce: false }));
+        const r = await bc.sendMessage(
+            internal({ from: user.address, to: m.address, value: toNano('0.3'), body, bounce: false }),
+        );
         const tx = r.transactions.find((t) => t.inMessage?.info.dest?.toString() === m.address.toString());
         const d: any = tx!.description;
-        console.log(`DM-8 non-bounceable: aborted=${d.aborted} exit=${d.computePhase?.exitCode} storage=${d.storagePhase?.storageFeesCollected} due=${d.storagePhase?.storageFeesDue}`);
-        console.log('CHECK-2 refund to user:', r.transactions.some((t) => t.inMessage?.info.dest?.toString() === user.address.toString()));
+        console.log(
+            `DM-8 non-bounceable: aborted=${d.aborted} exit=${d.computePhase?.exitCode} storage=${d.storagePhase?.storageFeesCollected} due=${d.storagePhase?.storageFeesDue}`,
+        );
+        console.log(
+            'CHECK-2 refund to user:',
+            r.transactions.some((t) => t.inMessage?.info.dest?.toString() === user.address.toString()),
+        );
     });
 
     it('CHECK: CreatePool with exactly 0.15 TON succeeds and the master keeps its balance', async () => {

