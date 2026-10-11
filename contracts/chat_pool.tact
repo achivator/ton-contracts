@@ -291,6 +291,8 @@ contract ChatPool with Deployable {
 
     // Outbound transfer funded by the incoming message: SendRemainingValue,
     // or SendRemainingBalance after a nativeReserve that keeps the storage rent.
+    // forward_payload is TEP-74 (Either Cell ^Cell): it needs at least the
+    // Either bit (0 = inline, empty), or real wallets throw (708 / USDT 9).
     fun sendJettons(wallet: Address, queryId: Int, amount: Int, to: Address, mode: Int) {
         send(SendParameters{
             to: wallet,
@@ -304,7 +306,7 @@ contract ChatPool with Deployable {
                 responseDestination: to,
                 customPayload: null,
                 forwardTonAmount: 0,
-                forwardPayload: emptySlice()
+                forwardPayload: beginCell().storeUint(0, 1).asSlice()
             }.toCell()
         });
     }
