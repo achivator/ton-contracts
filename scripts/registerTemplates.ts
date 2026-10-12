@@ -29,7 +29,11 @@ export async function run(provider: NetworkProvider) {
 
     const dir = path.resolve(__dirname, '../../miniapp/public/metadata/items/v1');
     const startIndex = Number(process.env.START_INDEX ?? '0');
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort().slice(startIndex);
+    const files = fs
+        .readdirSync(dir)
+        .filter((f) => f.endsWith('.json'))
+        .sort()
+        .slice(startIndex);
     const templates: Record<string, number> = {};
     const registered = Number(await registry.getTemplatesCount());
     if (registered !== startIndex) {
@@ -51,20 +55,27 @@ export async function run(provider: NetworkProvider) {
                 }),
             )
             .endCell();
-        const signature = beginCell().storeBuffer(signVoucher(voucherCell, kp, TAG.Register, registry.address)).endCell();
+        const signature = beginCell()
+            .storeBuffer(signVoucher(voucherCell, kp, TAG.Register, registry.address))
+            .endCell();
 
-        await registry.send(provider.sender(), { value: toNano('0.2') }, {
-            $$type: 'RegisterTemplate',
-            contentUrl: base + file,
-            contentHash: BigInt('0x' + sha256_sync(bytes).toString('hex')),
-            royalty: { $$type: 'RoyaltyParams', numerator: royaltyPercent, denominator: 100n, destination: sender },
-            voucherCell,
-            signature,
-        });
+        await registry.send(
+            provider.sender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'RegisterTemplate',
+                contentUrl: base + file,
+                contentHash: BigInt('0x' + sha256_sync(bytes).toString('hex')),
+                royalty: { $$type: 'RoyaltyParams', numerator: royaltyPercent, denominator: 100n, destination: sender },
+                voucherCell,
+                signature,
+            },
+        );
 
         // wait until the registry has counted this template
         for (let i = 0; i < 30 && Number(await registry.getTemplatesCount()) === templateId; i++) await sleep(3000);
-        if (Number(await registry.getTemplatesCount()) === templateId) throw new Error(`registration of ${type} not confirmed`);
+        if (Number(await registry.getTemplatesCount()) === templateId)
+            throw new Error(`registration of ${type} not confirmed`);
         templates[`v1/${type}`] = templateId;
         console.log(`TEMPLATE|v1/${type}|${templateId}`);
     }

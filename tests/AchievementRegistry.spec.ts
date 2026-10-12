@@ -46,7 +46,10 @@ describe('AchievementRegistry', () => {
         stranger = await blockchain.treasury('stranger');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        const collectionContent = beginCell().storeUint(1, 8).storeStringTail('https://achivator.cc/collection.json').endCell();
+        const collectionContent = beginCell()
+            .storeUint(1, 8)
+            .storeStringTail('https://achivator.cc/collection.json')
+            .endCell();
         registry = blockchain.openContract(
             await AchievementRegistry.fromInit(
                 owner.address,
@@ -184,7 +187,12 @@ describe('AchievementRegistry', () => {
 
         const res = await registry.send(member.getSender(), { value: toNano('1') }, mintVoucher(0n, 1n));
         const itemAddress = await registry.getNftAddress(0n);
-        expect(res.transactions).toHaveTransaction({ from: registry.address, to: itemAddress, deploy: true, success: true });
+        expect(res.transactions).toHaveTransaction({
+            from: registry.address,
+            to: itemAddress,
+            deploy: true,
+            success: true,
+        });
         // the registry refunds the unspent part of the 1 TON
         expect(res.transactions).toHaveTransaction({
             from: registry.address,
@@ -209,7 +217,11 @@ describe('AchievementRegistry', () => {
         const again = await registry.send(member.getSender(), { value: toNano('0.2') }, mintVoucher(0n, 2n));
         expect(again.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });
         // and a replayed nonce too
-        const replay = await registry.send(member.getSender(), { value: toNano('0.2') }, mintVoucher(0n, 1n, TG_USER + 1n));
+        const replay = await registry.send(
+            member.getSender(),
+            { value: toNano('0.2') },
+            mintVoucher(0n, 1n, TG_USER + 1n),
+        );
         expect(replay.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });
         expect(await registry.getItemsCount()).toEqual(1n);
     });
@@ -259,7 +271,9 @@ describe('AchievementRegistry', () => {
         await register(admin, registerVoucher(admin.address));
         const fields = { templateId: 0n, recipient: member.address, tgUserId: -TG_USER, nonce: 77n, expiry: farFuture };
         const libVoucher = voucherLib.buildMintVoucherCell(fields);
-        const genVoucher = beginCell().store(storeMintVoucher({ $$type: 'MintVoucher', ...fields })).endCell();
+        const genVoucher = beginCell()
+            .store(storeMintVoucher({ $$type: 'MintVoucher', ...fields }))
+            .endCell();
         expect(libVoucher.toBoc().toString('base64')).toEqual(genVoucher.toBoc().toString('base64'));
 
         const signature: Buffer = voucherLib.signVoucher(libVoucher, BACKEND_SECRET_HEX, {
@@ -269,7 +283,13 @@ describe('AchievementRegistry', () => {
         expect(signature).toEqual(signVoucher(genVoucher, backend, TAG.Mint, registry.address));
         const body: Cell = voucherLib.buildMintBody({ voucherCell: libVoucher, signature });
         const genBody = beginCell()
-            .store(storeMintAchievement({ $$type: 'MintAchievement', voucherCell: genVoucher, signature: signatureCell(signature) }))
+            .store(
+                storeMintAchievement({
+                    $$type: 'MintAchievement',
+                    voucherCell: genVoucher,
+                    signature: signatureCell(signature),
+                }),
+            )
             .endCell();
         expect(body.toBoc().toString('base64')).toEqual(genBody.toBoc().toString('base64'));
 
@@ -295,7 +315,11 @@ describe('AchievementRegistry', () => {
             const res = await who.send({
                 to: registry.address,
                 value: toNano('0.05'),
-                body: beginCell().storeUint(0x12345678, 32).storeCoins(toNano('0.01')).storeAddress(who.address).endCell(),
+                body: beginCell()
+                    .storeUint(0x12345678, 32)
+                    .storeCoins(toNano('0.01'))
+                    .storeAddress(who.address)
+                    .endCell(),
             });
             expect(res.transactions).toHaveTransaction({ from: who.address, to: registry.address, success: false });
         }
@@ -329,7 +353,14 @@ describe('AchievementRegistry', () => {
         const past = BigInt(Math.floor(Date.now() / 1000) - 60);
 
         const rv = beginCell()
-            .store(storeRegisterVoucher({ $$type: 'RegisterVoucher', chatId: CHAT_ID, registrant: admin.address, expiry: past }))
+            .store(
+                storeRegisterVoucher({
+                    $$type: 'RegisterVoucher',
+                    chatId: CHAT_ID,
+                    registrant: admin.address,
+                    expiry: past,
+                }),
+            )
             .endCell();
         const reg = await register(admin, {
             voucherCell: rv,
@@ -340,13 +371,26 @@ describe('AchievementRegistry', () => {
 
         await register(admin, registerVoucher(admin.address));
         const mv = beginCell()
-            .store(storeMintVoucher({ $$type: 'MintVoucher', templateId: 0n, recipient: member.address, tgUserId: TG_USER, nonce: 1n, expiry: past }))
+            .store(
+                storeMintVoucher({
+                    $$type: 'MintVoucher',
+                    templateId: 0n,
+                    recipient: member.address,
+                    tgUserId: TG_USER,
+                    nonce: 1n,
+                    expiry: past,
+                }),
+            )
             .endCell();
-        const mint = await registry.send(member.getSender(), { value: toNano('0.2') }, {
-            $$type: 'MintAchievement',
-            voucherCell: mv,
-            signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address)),
-        });
+        const mint = await registry.send(
+            member.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'MintAchievement',
+                voucherCell: mv,
+                signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address)),
+            },
+        );
         expect(mint.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });
         expect(await registry.getIsNonceUsed(1n)).toBe(false);
         expect(await registry.getItemsCount()).toEqual(0n);
@@ -366,7 +410,14 @@ describe('AchievementRegistry', () => {
         // the backend can produce such a cell, but a parsing bug there must
         // not mint or register anything.
         const rv = beginCell()
-            .store(storeRegisterVoucher({ $$type: 'RegisterVoucher', chatId: CHAT_ID, registrant: admin.address, expiry: farFuture }))
+            .store(
+                storeRegisterVoucher({
+                    $$type: 'RegisterVoucher',
+                    chatId: CHAT_ID,
+                    registrant: admin.address,
+                    expiry: farFuture,
+                }),
+            )
             .storeUint(1, 16)
             .endCell();
         const reg = await register(admin, {
@@ -378,14 +429,27 @@ describe('AchievementRegistry', () => {
 
         await register(admin, registerVoucher(admin.address));
         const mv = beginCell()
-            .store(storeMintVoucher({ $$type: 'MintVoucher', templateId: 0n, recipient: member.address, tgUserId: TG_USER, nonce: 1n, expiry: farFuture }))
+            .store(
+                storeMintVoucher({
+                    $$type: 'MintVoucher',
+                    templateId: 0n,
+                    recipient: member.address,
+                    tgUserId: TG_USER,
+                    nonce: 1n,
+                    expiry: farFuture,
+                }),
+            )
             .storeUint(1, 16)
             .endCell();
-        const mint = await registry.send(member.getSender(), { value: toNano('0.2') }, {
-            $$type: 'MintAchievement',
-            voucherCell: mv,
-            signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address)),
-        });
+        const mint = await registry.send(
+            member.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'MintAchievement',
+                voucherCell: mv,
+                signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address)),
+            },
+        );
         expect(mint.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });
         expect(await registry.getItemsCount()).toEqual(0n);
         expect(await registry.getIsNonceUsed(1n)).toBe(false);

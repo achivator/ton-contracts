@@ -26,9 +26,7 @@ export async function run(provider: NetworkProvider) {
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
 
-    const expiry = process.env.EXPIRY
-        ? BigInt(process.env.EXPIRY)
-        : BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const expiry = process.env.EXPIRY ? BigInt(process.env.EXPIRY) : BigInt(Math.floor(Date.now() / 1000) + 3600);
     const voucher = beginCell()
         .store(
             storeClaimVoucher({
@@ -42,15 +40,13 @@ export async function run(provider: NetworkProvider) {
             }),
         )
         .endCell();
-    const signature = beginCell().storeBuffer(signVoucher(voucher, kp, TAG.Claim, poolAddr)).endCell();
+    const signature = beginCell()
+        .storeBuffer(signVoucher(voucher, kp, TAG.Claim, poolAddr))
+        .endCell();
 
     const pool = provider.open(ChatPool.fromAddress(poolAddr));
     const prevLt = await lastTxLt(provider, sender);
-    await pool.send(
-        provider.sender(),
-        { value: toNano('0.15') },
-        { $$type: 'Claim', voucherCell: voucher, signature },
-    );
+    await pool.send(provider.sender(), { value: toNano('0.15') }, { $$type: 'Claim', voucherCell: voucher, signature });
 
     console.log('Claim sent:', amount.toString(), 'to', recipient.toString(), 'nonce', nonce.toString());
     await confirmSend(provider, sender, prevLt, 'claim');

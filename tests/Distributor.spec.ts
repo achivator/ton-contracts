@@ -23,7 +23,6 @@ function pubKeyBigInt(kp: KeyPair): bigint {
     return BigInt('0x' + kp.publicKey.toString('hex'));
 }
 
-
 function depositForwardPayload(args: {
     chatId: bigint;
     jettonMaster: Address;
@@ -92,15 +91,9 @@ describe('Token Distribution', () => {
         jettonWallet = await blockchain.treasury('jettonWallet');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        pool = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID, pubKeyBigInt(backend)),
-        );
+        pool = blockchain.openContract(await ChatPool.fromInit(master.address, CHAT_ID, pubKeyBigInt(backend)));
 
-        const dep = await pool.send(
-            deployer.getSender(),
-            { value: toNano('0.1') },
-            { $$type: 'Deploy', queryId: 0n },
-        );
+        const dep = await pool.send(deployer.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
         expect(dep.transactions).toHaveTransaction({
             from: deployer.address,
             to: pool.address,
@@ -155,7 +148,11 @@ describe('Token Distribution', () => {
             body: (b) => {
                 const cs = b!.beginParse();
                 cs.skip(32);
-                return cs.loadUintBig(64) === REFUND_QUERY && cs.loadCoins() === amount && cs.loadAddress().equals(admin.address);
+                return (
+                    cs.loadUintBig(64) === REFUND_QUERY &&
+                    cs.loadCoins() === amount &&
+                    cs.loadAddress().equals(admin.address)
+                );
             },
         });
         // nothing ever goes to the master
@@ -348,11 +345,15 @@ describe('Token Distribution', () => {
             kp: backend,
             pool: pool.address,
         });
-        await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            voucherCell,
-            signature,
-        });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                voucherCell,
+                signature,
+            },
+        );
 
         // non-admin is rejected
         const bad = await pool.send(
@@ -460,11 +461,15 @@ describe('Token Distribution', () => {
             kp: backend,
             pool: pool.address,
         });
-        await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            voucherCell: init.voucherCell,
-            signature: init.signature,
-        });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                voucherCell: init.voucherCell,
+                signature: init.signature,
+            },
+        );
 
         // a stranger cannot rotate, even holding a valid voucher naming itself
         const evil = setAdminVoucher({
@@ -475,11 +480,15 @@ describe('Token Distribution', () => {
             kp: backend,
             pool: pool.address,
         });
-        const bad = await pool.send(user.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            voucherCell: evil.voucherCell,
-            signature: evil.signature,
-        });
+        const bad = await pool.send(
+            user.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                voucherCell: evil.voucherCell,
+                signature: evil.signature,
+            },
+        );
         expect(bad.transactions).toHaveTransaction({
             from: user.address,
             to: pool.address,
@@ -496,11 +505,15 @@ describe('Token Distribution', () => {
             kp: backend,
             pool: pool.address,
         });
-        const ok = await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            voucherCell: handover.voucherCell,
-            signature: handover.signature,
-        });
+        const ok = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                voucherCell: handover.voucherCell,
+                signature: handover.signature,
+            },
+        );
         expect(ok.transactions).toHaveTransaction({
             from: admin.address,
             to: pool.address,
@@ -509,12 +522,16 @@ describe('Token Distribution', () => {
         expect((await pool.getPoolAdmin())!.equals(user.address)).toBe(true);
 
         // the old admin loses withdrawal rights...
-        const stale = await pool.send(admin.getSender(), { value: toNano('0.1') }, {
-            $$type: 'WithdrawRemainder',
-            jettonMaster,
-            amount: toNano('1000'),
-            to: admin.address,
-        });
+        const stale = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'WithdrawRemainder',
+                jettonMaster,
+                amount: toNano('1000'),
+                to: admin.address,
+            },
+        );
         expect(stale.transactions).toHaveTransaction({
             from: admin.address,
             to: pool.address,
@@ -522,11 +539,15 @@ describe('Token Distribution', () => {
         });
 
         // ...and cannot re-grab the slot by replaying the init voucher.
-        const replay = await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            voucherCell: init.voucherCell,
-            signature: init.signature,
-        });
+        const replay = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                voucherCell: init.voucherCell,
+                signature: init.signature,
+            },
+        );
         expect(replay.transactions).toHaveTransaction({
             from: admin.address,
             to: pool.address,
@@ -535,12 +556,16 @@ describe('Token Distribution', () => {
         expect((await pool.getPoolAdmin())!.equals(user.address)).toBe(true);
 
         // the new admin can withdraw.
-        const sweep = await pool.send(user.getSender(), { value: toNano('0.1') }, {
-            $$type: 'WithdrawRemainder',
-            jettonMaster,
-            amount: toNano('1000'),
-            to: user.address,
-        });
+        const sweep = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'WithdrawRemainder',
+                jettonMaster,
+                amount: toNano('1000'),
+                to: user.address,
+            },
+        );
         expect(sweep.transactions).toHaveTransaction({
             from: pool.address,
             to: jettonWallet.address,
@@ -560,40 +585,64 @@ describe('Token Distribution', () => {
         };
 
         // expired
-        const expired = await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            ...setAdminVoucher({ ...good, expiry: past }),
-        });
+        const expired = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                ...setAdminVoucher({ ...good, expiry: past }),
+            },
+        );
         expect(expired.transactions).toHaveTransaction({
-            from: admin.address, to: pool.address, success: false,
+            from: admin.address,
+            to: pool.address,
+            success: false,
         });
 
         // voucher for another chat
-        const crossChat = await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            ...setAdminVoucher({ ...good, chatId: CHAT_ID + 1n }),
-        });
+        const crossChat = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                ...setAdminVoucher({ ...good, chatId: CHAT_ID + 1n }),
+            },
+        );
         expect(crossChat.transactions).toHaveTransaction({
-            from: admin.address, to: pool.address, success: false,
+            from: admin.address,
+            to: pool.address,
+            success: false,
         });
 
         // voucher for another master
-        const crossMaster = await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            ...setAdminVoucher({ ...good, master: user.address }),
-        });
+        const crossMaster = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                ...setAdminVoucher({ ...good, master: user.address }),
+            },
+        );
         expect(crossMaster.transactions).toHaveTransaction({
-            from: admin.address, to: pool.address, success: false,
+            from: admin.address,
+            to: pool.address,
+            success: false,
         });
 
         // signature by a different key
         const wrongKey = keyPairFromSeed(Buffer.alloc(32, 9));
-        const badSig = await pool.send(admin.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetAdmin',
-            ...setAdminVoucher({ ...good, kp: wrongKey }),
-        });
+        const badSig = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                ...setAdminVoucher({ ...good, kp: wrongKey }),
+            },
+        );
         expect(badSig.transactions).toHaveTransaction({
-            from: admin.address, to: pool.address, success: false,
+            from: admin.address,
+            to: pool.address,
+            success: false,
         });
 
         expect(await pool.getPoolAdmin()).toBeNull();
@@ -615,11 +664,19 @@ describe('Token Distribution', () => {
         const res = await pool.send(
             jettonWallet.getSender(),
             { value: toNano('0.01') },
-            { $$type: 'JettonTransferNotification', queryId: 0n, amount: toNano('1000'), sender: admin.address, forwardPayload },
+            {
+                $$type: 'JettonTransferNotification',
+                queryId: 0n,
+                amount: toNano('1000'),
+                sender: admin.address,
+                forwardPayload,
+            },
         );
         expectRefund(res, toNano('1000'));
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
-        expect((await blockchain.getContract(pool.address)).balance).toBeGreaterThanOrEqual(poolBefore - toNano('0.001'));
+        expect((await blockchain.getContract(pool.address)).balance).toBeGreaterThanOrEqual(
+            poolBefore - toNano('0.001'),
+        );
     });
 
     it('refunds a deposit voucher signed for another pool or as another voucher kind', async () => {
@@ -646,7 +703,13 @@ describe('Token Distribution', () => {
             const res = await pool.send(
                 jettonWallet.getSender(),
                 { value: toNano('0.5') },
-                { $$type: 'JettonTransferNotification', queryId: 0n, amount: toNano('5'), sender: admin.address, forwardPayload },
+                {
+                    $$type: 'JettonTransferNotification',
+                    queryId: 0n,
+                    amount: toNano('5'),
+                    sender: admin.address,
+                    forwardPayload,
+                },
             );
             expectRefund(res, toNano('5'));
         }
@@ -667,7 +730,13 @@ describe('Token Distribution', () => {
         await pool.send(
             rogueWallet.getSender(),
             { value: toNano('0.5') },
-            { $$type: 'JettonTransferNotification', queryId: 0n, amount: toNano('1000000'), sender: admin.address, forwardPayload },
+            {
+                $$type: 'JettonTransferNotification',
+                queryId: 0n,
+                amount: toNano('1000000'),
+                sender: admin.address,
+                forwardPayload,
+            },
         );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('10'));
         expect((await pool.getJettonWallet(jettonMaster))!.equals(jettonWallet.address)).toBe(true);
@@ -729,7 +798,13 @@ describe('Token Distribution', () => {
             .storeBits(transfer.beginParse().loadBits(256))
             .endCell();
         await blockchain.sendMessage(
-            internal({ from: jettonWallet.address, to: pool.address, value: toNano('0.05'), body: bouncedBody, bounced: true }),
+            internal({
+                from: jettonWallet.address,
+                to: pool.address,
+                value: toNano('0.05'),
+                body: bouncedBody,
+                bounced: true,
+            }),
         );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
         expect(await pool.getIsNonceUsed(7n)).toBe(false);
@@ -790,7 +865,13 @@ describe('Token Distribution', () => {
         const res = await pool.send(
             jettonWallet.getSender(),
             { value: toNano('0.5') },
-            { $$type: 'JettonTransferNotification', queryId: 0n, amount: toNano('1000'), sender: admin.address, forwardPayload },
+            {
+                $$type: 'JettonTransferNotification',
+                queryId: 0n,
+                amount: toNano('1000'),
+                sender: admin.address,
+                forwardPayload,
+            },
         );
         expectRefund(res, toNano('1000'));
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
@@ -800,41 +881,79 @@ describe('Token Distribution', () => {
         await deposit(toNano('1000'));
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('100'));
 
-        const ok = await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('60'), nonce: 1n }));
+        const ok = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            claimVoucher({ amount: toNano('60'), nonce: 1n }),
+        );
         expect(ok.transactions).toHaveTransaction({ from: pool.address, to: jettonWallet.address, success: true });
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('40'));
 
         // a stolen key could sign this, but the pool refuses to go over budget
-        const over = await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('41'), nonce: 2n }));
+        const over = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            claimVoucher({ amount: toNano('41'), nonce: 2n }),
+        );
         expect(over.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('940'));
 
         // next UTC day the budget renews (10% of the new balance)
         blockchain.now = Math.floor(Date.now() / 1000) + 86400;
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('94'));
-        const tomorrow = await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('41'), nonce: 2n, expiry: farFuture + 86400n }));
-        expect(tomorrow.transactions).toHaveTransaction({ from: pool.address, to: jettonWallet.address, success: true });
+        const tomorrow = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            claimVoucher({ amount: toNano('41'), nonce: 2n, expiry: farFuture + 86400n }),
+        );
+        expect(tomorrow.transactions).toHaveTransaction({
+            from: pool.address,
+            to: jettonWallet.address,
+            success: true,
+        });
     });
 
     it('lets only the admin set an explicit daily limit, effective immediately', async () => {
         await deposit(toNano('1000'));
-        const bad = await pool.send(user.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetClaimLimit', jettonMaster, dailyLimit: toNano('1000'),
-        });
+        const bad = await pool.send(
+            user.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetClaimLimit',
+                jettonMaster,
+                dailyLimit: toNano('1000'),
+            },
+        );
         expect(bad.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
 
         await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('90'), nonce: 1n }));
-        await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetClaimLimit', jettonMaster, dailyLimit: toNano('500') });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetClaimLimit', jettonMaster, dailyLimit: toNano('500') },
+        );
         expect(await pool.getClaimLimit(jettonMaster)).toEqual(toNano('500'));
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('410'));
 
-        await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetClaimLimit', jettonMaster, dailyLimit: toNano('50') });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetClaimLimit', jettonMaster, dailyLimit: toNano('50') },
+        );
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(0n);
-        const blocked = await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('1'), nonce: 2n }));
+        const blocked = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            claimVoucher({ amount: toNano('1'), nonce: 2n }),
+        );
         expect(blocked.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
 
         // 0 restores the default share
-        await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetClaimLimit', jettonMaster, dailyLimit: 0n });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetClaimLimit', jettonMaster, dailyLimit: 0n },
+        );
         expect(await pool.getClaimLimit(jettonMaster)).toEqual(0n);
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('1'));
     });
@@ -842,25 +961,46 @@ describe('Token Distribution', () => {
     it('lets the admin pause claims and move the pool to a new backend key', async () => {
         await deposit(toNano('1000'));
 
-        const strangerPause = await pool.send(user.getSender(), { value: toNano('0.05') }, { $$type: 'SetClaimsPaused', paused: true });
+        const strangerPause = await pool.send(
+            user.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetClaimsPaused', paused: true },
+        );
         expect(strangerPause.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
 
         await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetClaimsPaused', paused: true });
         expect(await pool.getClaimsPaused()).toBe(true);
-        const paused = await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('1'), nonce: 1n }));
+        const paused = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            claimVoucher({ amount: toNano('1'), nonce: 1n }),
+        );
         expect(paused.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
 
         // rotate to a fresh key: old-key vouchers die, new-key vouchers work
         const fresh = keyPairFromSeed(Buffer.alloc(32, 11));
-        const strangerKey = await pool.send(user.getSender(), { value: toNano('0.05') }, {
-            $$type: 'SetPoolBackendKey', backendPubKey: pubKeyBigInt(fresh),
-        });
+        const strangerKey = await pool.send(
+            user.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetPoolBackendKey',
+                backendPubKey: pubKeyBigInt(fresh),
+            },
+        );
         expect(strangerKey.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
-        await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetPoolBackendKey', backendPubKey: pubKeyBigInt(fresh) });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetPoolBackendKey', backendPubKey: pubKeyBigInt(fresh) },
+        );
         expect(await pool.getBackendKey()).toEqual(pubKeyBigInt(fresh));
         await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetClaimsPaused', paused: false });
 
-        const oldKey = await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('1'), nonce: 1n }));
+        const oldKey = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            claimVoucher({ amount: toNano('1'), nonce: 1n }),
+        );
         expect(oldKey.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
 
         const voucher = claimVoucher({ amount: toNano('1'), nonce: 1n });
@@ -873,7 +1013,11 @@ describe('Token Distribution', () => {
         await deposit(toNano('1000'));
         const before = (await blockchain.getContract(pool.address)).balance;
         for (let n = 1n; n <= 5n; n++) {
-            await pool.send(user.getSender(), { value: toNano('0.1') }, claimVoucher({ amount: toNano('1'), nonce: n }));
+            await pool.send(
+                user.getSender(),
+                { value: toNano('0.1') },
+                claimVoucher({ amount: toNano('1'), nonce: n }),
+            );
         }
         const after = (await blockchain.getContract(pool.address)).balance;
         expect(after - before).toBeGreaterThanOrEqual(toNano('0.009'));
@@ -896,57 +1040,87 @@ describe('Token Distribution', () => {
         await deposit(toNano('1000'));
 
         // tracked: amount <= balance, ledger debited to 900
-        await pool.send(admin.getSender(), { value: toNano('0.1') }, {
-            $$type: 'WithdrawRemainder', jettonMaster, amount: toNano('100'), to: admin.address,
-        });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'WithdrawRemainder',
+                jettonMaster,
+                amount: toNano('100'),
+                to: admin.address,
+            },
+        );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('900'));
 
         // the jetton wallet rejects the transfer and bounces it
         const tracked = beginCell()
-            .store(storeJettonTransfer({
-                $$type: 'JettonTransfer',
-                queryId: WITHDRAW_TRACKED_QUERY,
-                amount: toNano('100'),
-                destination: admin.address,
-                responseDestination: admin.address,
-                customPayload: null,
-                forwardTonAmount: 0n,
-                forwardPayload: beginCell().endCell(),
-            }))
+            .store(
+                storeJettonTransfer({
+                    $$type: 'JettonTransfer',
+                    queryId: WITHDRAW_TRACKED_QUERY,
+                    amount: toNano('100'),
+                    destination: admin.address,
+                    responseDestination: admin.address,
+                    customPayload: null,
+                    forwardTonAmount: 0n,
+                    forwardPayload: beginCell().endCell(),
+                }),
+            )
             .endCell();
         const bouncedTracked = beginCell()
             .storeUint(0xffffffff, 32)
             .storeBits(tracked.beginParse().loadBits(256))
             .endCell();
         await blockchain.sendMessage(
-            internal({ from: jettonWallet.address, to: pool.address, value: toNano('0.05'), body: bouncedTracked, bounced: true }),
+            internal({
+                from: jettonWallet.address,
+                to: pool.address,
+                value: toNano('0.05'),
+                body: bouncedTracked,
+                bounced: true,
+            }),
         );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
 
         // untracked: amount > balance zeroes the ledger; its bounce must not
         // credit anything back (the jettons never were in the ledger)
-        await pool.send(admin.getSender(), { value: toNano('0.1') }, {
-            $$type: 'WithdrawRemainder', jettonMaster, amount: toNano('2000'), to: admin.address,
-        });
+        await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'WithdrawRemainder',
+                jettonMaster,
+                amount: toNano('2000'),
+                to: admin.address,
+            },
+        );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
         const untracked = beginCell()
-            .store(storeJettonTransfer({
-                $$type: 'JettonTransfer',
-                queryId: WITHDRAW_UNTRACKED_QUERY,
-                amount: toNano('2000'),
-                destination: admin.address,
-                responseDestination: admin.address,
-                customPayload: null,
-                forwardTonAmount: 0n,
-                forwardPayload: beginCell().endCell(),
-            }))
+            .store(
+                storeJettonTransfer({
+                    $$type: 'JettonTransfer',
+                    queryId: WITHDRAW_UNTRACKED_QUERY,
+                    amount: toNano('2000'),
+                    destination: admin.address,
+                    responseDestination: admin.address,
+                    customPayload: null,
+                    forwardTonAmount: 0n,
+                    forwardPayload: beginCell().endCell(),
+                }),
+            )
             .endCell();
         const bouncedUntracked = beginCell()
             .storeUint(0xffffffff, 32)
             .storeBits(untracked.beginParse().loadBits(256))
             .endCell();
         await blockchain.sendMessage(
-            internal({ from: jettonWallet.address, to: pool.address, value: toNano('0.05'), body: bouncedUntracked, bounced: true }),
+            internal({
+                from: jettonWallet.address,
+                to: pool.address,
+                value: toNano('0.05'),
+                body: bouncedUntracked,
+                bounced: true,
+            }),
         );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
     });
@@ -954,13 +1128,15 @@ describe('Token Distribution', () => {
     it('rejects admin vouchers signed as another kind or for another pool', async () => {
         const other = await blockchain.treasury('otherPool');
         const voucher = beginCell()
-            .store(storeAdminInitVoucher({
-                $$type: 'AdminInitVoucher',
-                chatId: CHAT_ID,
-                master: master.address,
-                admin: admin.address,
-                expiry: farFuture,
-            }))
+            .store(
+                storeAdminInitVoucher({
+                    $$type: 'AdminInitVoucher',
+                    chatId: CHAT_ID,
+                    master: master.address,
+                    admin: admin.address,
+                    expiry: farFuture,
+                }),
+            )
             .endCell();
         const cases = [
             // right target, wrong tag
@@ -978,22 +1154,28 @@ describe('Token Distribution', () => {
     it('rejects claim vouchers with trailing data without burning the nonce', async () => {
         await deposit(toNano('1000'));
         const voucher = beginCell()
-            .store(storeClaimVoucher({
-                $$type: 'ClaimVoucher',
-                chatId: CHAT_ID,
-                recipient: user.address,
-                jettonMaster,
-                amount: toNano('1'),
-                nonce: 1n,
-                expiry: farFuture,
-            }))
+            .store(
+                storeClaimVoucher({
+                    $$type: 'ClaimVoucher',
+                    chatId: CHAT_ID,
+                    recipient: user.address,
+                    jettonMaster,
+                    amount: toNano('1'),
+                    nonce: 1n,
+                    expiry: farFuture,
+                }),
+            )
             .storeUint(1, 16)
             .endCell();
-        const res = await pool.send(user.getSender(), { value: toNano('0.1') }, {
-            $$type: 'Claim',
-            voucherCell: voucher,
-            signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address)),
-        });
+        const res = await pool.send(
+            user.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'Claim',
+                voucherCell: voucher,
+                signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address)),
+            },
+        );
         expect(res.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
         expect(await pool.getIsNonceUsed(1n)).toBe(false);
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
@@ -1002,13 +1184,15 @@ describe('Token Distribution', () => {
     it('aborts a deposit whose voucher carries trailing data (backend-signed, so a throw, not a refund)', async () => {
         await initAdmin();
         const voucher = beginCell()
-            .store(storeDepositVoucher({
-                $$type: 'DepositVoucher',
-                chatId: CHAT_ID,
-                jettonMaster,
-                expectedJettonWallet: jettonWallet.address,
-                expiry: farFuture,
-            }))
+            .store(
+                storeDepositVoucher({
+                    $$type: 'DepositVoucher',
+                    chatId: CHAT_ID,
+                    jettonMaster,
+                    expectedJettonWallet: jettonWallet.address,
+                    expiry: farFuture,
+                }),
+            )
             .storeUint(1, 16)
             .endCell();
         const forwardPayload = beginCell()
@@ -1018,7 +1202,13 @@ describe('Token Distribution', () => {
         const res = await pool.send(
             jettonWallet.getSender(),
             { value: toNano('0.5') },
-            { $$type: 'JettonTransferNotification', queryId: 0n, amount: toNano('1000'), sender: admin.address, forwardPayload },
+            {
+                $$type: 'JettonTransferNotification',
+                queryId: 0n,
+                amount: toNano('1000'),
+                sender: admin.address,
+                forwardPayload,
+            },
         );
         expect(res.transactions).toHaveTransaction({ from: jettonWallet.address, to: pool.address, success: false });
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
@@ -1040,9 +1230,7 @@ describe('DistributorMaster', () => {
         stranger = await blockchain.treasury('stranger');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        masterC = blockchain.openContract(
-            await DistributorMaster.fromInit(owner.address, pubKeyBigInt(backend)),
-        );
+        masterC = blockchain.openContract(await DistributorMaster.fromInit(owner.address, pubKeyBigInt(backend)));
         const dep = await masterC.send(
             deployer.getSender(),
             { value: toNano('0.1') },
@@ -1097,7 +1285,11 @@ describe('DistributorMaster', () => {
 
     it('keeps nothing from CreatePool: the pool gets its deploy value, the caller the rest', async () => {
         const before = (await blockchain.getContract(masterC.address)).balance;
-        const res = await masterC.send(stranger.getSender(), { value: toNano('1') }, { $$type: 'CreatePool', chatId: CHAT_ID });
+        const res = await masterC.send(
+            stranger.getSender(),
+            { value: toNano('1') },
+            { $$type: 'CreatePool', chatId: CHAT_ID },
+        );
         expect(res.transactions).toHaveTransaction({
             from: masterC.address,
             to: stranger.address,
@@ -1111,12 +1303,24 @@ describe('DistributorMaster', () => {
 
     it('rotates the backend key, owner only, and returns the attached TON', async () => {
         const next = BigInt('0x' + keyPairFromSeed(Buffer.alloc(32, 8)).publicKey.toString('hex'));
-        const bad = await masterC.send(stranger.getSender(), { value: toNano('0.05') }, { $$type: 'RotateBackendKey', backendPubKey: next });
+        const bad = await masterC.send(
+            stranger.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'RotateBackendKey', backendPubKey: next },
+        );
         expect(bad.transactions).toHaveTransaction({ from: stranger.address, to: masterC.address, success: false });
 
         const before = (await blockchain.getContract(masterC.address)).balance;
-        const ok = await masterC.send(owner.getSender(), { value: toNano('0.5') }, { $$type: 'RotateBackendKey', backendPubKey: next });
-        expect(ok.transactions).toHaveTransaction({ from: masterC.address, to: owner.address, value: (v) => v! > toNano('0.45') });
+        const ok = await masterC.send(
+            owner.getSender(),
+            { value: toNano('0.5') },
+            { $$type: 'RotateBackendKey', backendPubKey: next },
+        );
+        expect(ok.transactions).toHaveTransaction({
+            from: masterC.address,
+            to: owner.address,
+            value: (v) => v! > toNano('0.45'),
+        });
         expect(await masterC.getBackendKey()).toEqual(next);
         expect((await blockchain.getContract(masterC.address)).balance - before).toBeLessThan(toNano('0.001'));
     });

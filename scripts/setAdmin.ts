@@ -27,9 +27,7 @@ export async function run(provider: NetworkProvider) {
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
 
-    const expiry = process.env.EXPIRY
-        ? BigInt(process.env.EXPIRY)
-        : BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const expiry = process.env.EXPIRY ? BigInt(process.env.EXPIRY) : BigInt(Math.floor(Date.now() / 1000) + 3600);
     const voucher = beginCell()
         .store(
             storeAdminInitVoucher({
@@ -41,7 +39,9 @@ export async function run(provider: NetworkProvider) {
             }),
         )
         .endCell();
-    const signature = beginCell().storeBuffer(signVoucher(voucher, kp, TAG.Admin, poolAddr)).endCell();
+    const signature = beginCell()
+        .storeBuffer(signVoucher(voucher, kp, TAG.Admin, poolAddr))
+        .endCell();
 
     const pool = provider.open(ChatPool.fromAddress(poolAddr));
     const prevLt = await lastTxLt(provider, sender);

@@ -94,11 +94,15 @@ describe('miniapp lib <-> contracts', () => {
         const content = beginCell().storeUint(0, 8).storeStringTail('test').endCell();
         minter = blockchain.openContract(await TestJettonMinter.fromInit(owner.address, content));
         await minter.send(owner.getSender(), { value: toNano('0.05') }, { $$type: 'Deploy', queryId: 0n });
-        const mintRes = await minter.send(owner.getSender(), { value: toNano('0.2') }, {
-            $$type: 'Mint',
-            amount: toNano('1000'),
-            recipient: creator.address,
-        });
+        const mintRes = await minter.send(
+            owner.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'Mint',
+                amount: toNano('1000'),
+                recipient: creator.address,
+            },
+        );
         expect(mintRes.transactions).toHaveTransaction({ to: minter.address, success: true });
     });
 
@@ -169,8 +173,13 @@ describe('miniapp lib <-> contracts', () => {
         const genEnvelope = beginCell()
             .store(storeSignedVoucher({ $$type: 'SignedVoucher', tag: TAG.Claim, target, voucher: genClaimVoucher }))
             .endCell();
-        expect(boc(voucherLib.signedVoucherCell(libClaimVoucher, { tag: tags.Claim, target }))).toEqual(boc(genEnvelope));
-        const libSignature: Buffer = voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX, { tag: tags.Claim, target });
+        expect(boc(voucherLib.signedVoucherCell(libClaimVoucher, { tag: tags.Claim, target }))).toEqual(
+            boc(genEnvelope),
+        );
+        const libSignature: Buffer = voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX, {
+            tag: tags.Claim,
+            target,
+        });
         expect(libSignature).toEqual(signVoucher(libClaimVoucher, backend, TAG.Claim, target));
         // an unsigned-kind call must never silently sign the bare cell
         expect(() => voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX)).toThrow();
@@ -208,17 +217,27 @@ describe('miniapp lib <-> contracts', () => {
         );
         for (const paused of [true, false]) {
             expect(boc(voucherLib.buildSetClaimsPausedBody(paused))).toEqual(
-                boc(beginCell().store(storeSetClaimsPaused({ $$type: 'SetClaimsPaused', paused })).endCell()),
+                boc(
+                    beginCell()
+                        .store(storeSetClaimsPaused({ $$type: 'SetClaimsPaused', paused }))
+                        .endCell(),
+                ),
             );
         }
         expect(boc(voucherLib.buildSetClaimLimitBody({ jettonMaster, dailyLimit: AMOUNT }))).toEqual(
-            boc(beginCell().store(storeSetClaimLimit({ $$type: 'SetClaimLimit', jettonMaster, dailyLimit: AMOUNT })).endCell()),
+            boc(
+                beginCell()
+                    .store(storeSetClaimLimit({ $$type: 'SetClaimLimit', jettonMaster, dailyLimit: AMOUNT }))
+                    .endCell(),
+            ),
         );
         const keyHex = backend.publicKey.toString('hex');
         expect(boc(voucherLib.buildSetPoolBackendKeyBody(keyHex))).toEqual(
             boc(
                 beginCell()
-                    .store(storeSetPoolBackendKey({ $$type: 'SetPoolBackendKey', backendPubKey: BigInt('0x' + keyHex) }))
+                    .store(
+                        storeSetPoolBackendKey({ $$type: 'SetPoolBackendKey', backendPubKey: BigInt('0x' + keyHex) }),
+                    )
                     .endCell(),
             ),
         );
@@ -278,7 +297,9 @@ describe('miniapp lib <-> contracts', () => {
         expect(boc(libTransfer)).toEqual(boc(genTransfer));
 
         // CreatePool request.
-        const genCreate = beginCell().store(storeCreatePool({ $$type: 'CreatePool', chatId: CHAT_ID })).endCell();
+        const genCreate = beginCell()
+            .store(storeCreatePool({ $$type: 'CreatePool', chatId: CHAT_ID }))
+            .endCell();
         expect(boc(voucherLib.buildCreatePoolBody(CHAT_ID))).toEqual(boc(genCreate));
 
         // Telegram supergroup ids are negative; int64 must be two's complement
@@ -517,7 +538,11 @@ describe('miniapp lib <-> contracts', () => {
                 creator.address,
                 pool.address,
                 toNano('0.15'),
-                voucherLib.buildWithdrawRemainderBody({ jettonMaster: minter.address, amount: rest, to: creator.address }),
+                voucherLib.buildWithdrawRemainderBody({
+                    jettonMaster: minter.address,
+                    amount: rest,
+                    to: creator.address,
+                }),
             ),
         );
         const creatorWallet = blockchain.openContract(TestJettonWallet.fromAddress(creatorWalletAddr));

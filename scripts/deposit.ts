@@ -78,13 +78,9 @@ export async function run(provider: NetworkProvider) {
     await confirmSend(provider, admin, prevLt, 'deposit');
 }
 
-async function jettonWalletOf(
-    provider: NetworkProvider,
-    jettonMaster: Address,
-    owner: Address,
-): Promise<Address> {
-    const res = await provider.provider(jettonMaster).get('get_wallet_address', [
-        { type: 'slice', cell: beginCell().storeAddress(owner).endCell() },
-    ]);
+async function jettonWalletOf(provider: NetworkProvider, jettonMaster: Address, owner: Address): Promise<Address> {
+    const res = await provider
+        .provider(jettonMaster)
+        .get('get_wallet_address', [{ type: 'slice', cell: beginCell().storeAddress(owner).endCell() }]);
     return (res.stack as TupleReader).readAddress();
 }

@@ -2,7 +2,13 @@ import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox';
 import { beginCell, storeMessage, toNano } from '@ton/core';
 import { keyPairFromSeed, KeyPair, sign } from '@ton/crypto';
 import { TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
-import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher, storeJettonTransferNotification } from '../wrappers/ChatPool';
+import {
+    ChatPool,
+    storeAdminInitVoucher,
+    storeClaimVoucher,
+    storeDepositVoucher,
+    storeJettonTransferNotification,
+} from '../wrappers/ChatPool';
 import '@ton/test-utils';
 import { signatureCell, signVoucher, TAG } from './helpers/vouchers';
 
@@ -30,11 +36,7 @@ describe('TestJetton flow', () => {
         pool = blockchain.openContract(
             await ChatPool.fromInit(master.address, CHAT_ID, BigInt('0x' + backend.publicKey.toString('hex'))),
         );
-        const depPool = await pool.send(
-            admin.getSender(),
-            { value: toNano('0.1') },
-            { $$type: 'Deploy', queryId: 0n },
-        );
+        const depPool = await pool.send(admin.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
         expect(depPool.transactions).toHaveTransaction({
             from: admin.address,
             to: pool.address,
@@ -51,11 +53,15 @@ describe('TestJetton flow', () => {
         );
         expect(depMinter.transactions).toHaveTransaction({ to: minter.address, deploy: true, success: true });
 
-        const mintRes = await minter.send(admin.getSender(), { value: toNano('0.2') }, {
-            $$type: 'Mint',
-            amount: toNano('1000'),
-            recipient: admin.address,
-        });
+        const mintRes = await minter.send(
+            admin.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'Mint',
+                amount: toNano('1000'),
+                recipient: admin.address,
+            },
+        );
         expect(mintRes.transactions).toHaveTransaction({ to: minter.address, success: true });
     });
 
@@ -134,11 +140,21 @@ describe('TestJetton flow', () => {
 
         dump(res, 'deposit flow');
         expect(res.transactions).toHaveTransaction({ from: admin.address, to: adminWalletAddr, success: true });
-        expect(res.transactions).toHaveTransaction({ from: adminWalletAddr, to: poolWalletAddr, success: true, deploy: true });
+        expect(res.transactions).toHaveTransaction({
+            from: adminWalletAddr,
+            to: poolWalletAddr,
+            success: true,
+            deploy: true,
+        });
         expect(res.transactions).toHaveTransaction({ from: poolWalletAddr, to: pool.address, success: true });
         // no fee: nothing reaches the master, the forwarded TON comes back
         expect(res.transactions).not.toHaveTransaction({ from: pool.address, to: master.address });
-        expect(res.transactions).toHaveTransaction({ from: pool.address, to: admin.address, op: 0xd53276db, success: true });
+        expect(res.transactions).toHaveTransaction({
+            from: pool.address,
+            to: admin.address,
+            op: 0xd53276db,
+            success: true,
+        });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
@@ -210,7 +226,12 @@ describe('TestJetton flow', () => {
         });
         // no fee: nothing reaches the master, the forwarded TON comes back
         expect(res.transactions).not.toHaveTransaction({ from: pool.address, to: master.address });
-        expect(res.transactions).toHaveTransaction({ from: pool.address, to: admin.address, op: 0xd53276db, success: true });
+        expect(res.transactions).toHaveTransaction({
+            from: pool.address,
+            to: admin.address,
+            op: 0xd53276db,
+            success: true,
+        });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
@@ -232,11 +253,7 @@ describe('TestJetton flow', () => {
         const poolB = blockchain.openContract(
             await ChatPool.fromInit(master.address, CHAT_ID_B, BigInt('0x' + backend.publicKey.toString('hex'))),
         );
-        const depB = await poolB.send(
-            admin.getSender(),
-            { value: toNano('0.1') },
-            { $$type: 'Deploy', queryId: 0n },
-        );
+        const depB = await poolB.send(admin.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
         expect(depB.transactions).toHaveTransaction({ to: poolB.address, deploy: true, success: true });
 
         async function depositTo(
@@ -314,12 +331,19 @@ describe('TestJetton flow', () => {
         await depositTo(pool, CHAT_ID, admin, toNano('100'));
         await depositTo(poolB, CHAT_ID_B, adminB, toNano('500'));
         // lift the default 10%/day claim budget so the whole balance can move
-        for (const [p, a] of [[pool, admin], [poolB, adminB]] as const) {
-            await p.send(a.getSender(), { value: toNano('0.05') }, {
-                $$type: 'SetClaimLimit',
-                jettonMaster: minter.address,
-                dailyLimit: toNano('1000'),
-            });
+        for (const [p, a] of [
+            [pool, admin],
+            [poolB, adminB],
+        ] as const) {
+            await p.send(
+                a.getSender(),
+                { value: toNano('0.05') },
+                {
+                    $$type: 'SetClaimLimit',
+                    jettonMaster: minter.address,
+                    dailyLimit: toNano('1000'),
+                },
+            );
         }
 
         // Same jetton master feeds two pools; ledgers, admins and pool

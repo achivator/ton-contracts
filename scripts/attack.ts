@@ -44,9 +44,7 @@ export async function run(provider: NetworkProvider) {
     const sender = provider.sender().address;
     if (!sender) throw new Error('Sender address is not defined');
     const recipient = process.env.RECIPIENT ? Address.parse(process.env.RECIPIENT) : sender;
-    const expiry = process.env.EXPIRY
-        ? BigInt(process.env.EXPIRY)
-        : BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const expiry = process.env.EXPIRY ? BigInt(process.env.EXPIRY) : BigInt(Math.floor(Date.now() / 1000) + 3600);
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
@@ -67,8 +65,12 @@ export async function run(provider: NetworkProvider) {
                 }),
             )
             .endCell();
-        const signature = beginCell().storeBuffer(signVoucher(voucher, sigKp, TAG.Claim, poolAddr)).endCell();
-        return beginCell().store(storeClaim({ $$type: 'Claim', voucherCell: voucher, signature })).endCell();
+        const signature = beginCell()
+            .storeBuffer(signVoucher(voucher, sigKp, TAG.Claim, poolAddr))
+            .endCell();
+        return beginCell()
+            .store(storeClaim({ $$type: 'Claim', voucherCell: voucher, signature }))
+            .endCell();
     };
 
     const prevLt = await lastTxLt(provider, sender);
@@ -206,14 +208,16 @@ export async function run(provider: NetworkProvider) {
         case 'withdraw': {
             const amount = toNano(reqEnv('AMOUNT'));
             const to = process.env.TO ? Address.parse(process.env.TO) : sender;
-            await pool.send(provider.sender(), { value: toNano('0.15') }, { $$type: 'WithdrawRemainder', jettonMaster, amount, to });
+            await pool.send(
+                provider.sender(),
+                { value: toNano('0.15') },
+                { $$type: 'WithdrawRemainder', jettonMaster, amount, to },
+            );
             break;
         }
         case 'set_admin': {
             const namedAdmin = process.env.ADMIN ? Address.parse(process.env.ADMIN) : sender;
-            const signKp = process.env.SIG_KEY === 'foreign'
-                ? keyPairFromSeed(Buffer.alloc(32, 7))
-                : kp;
+            const signKp = process.env.SIG_KEY === 'foreign' ? keyPairFromSeed(Buffer.alloc(32, 7)) : kp;
             const voucher = beginCell()
                 .store(
                     storeAdminInitVoucher({
@@ -225,7 +229,9 @@ export async function run(provider: NetworkProvider) {
                     }),
                 )
                 .endCell();
-            const signature = beginCell().storeBuffer(signVoucher(voucher, signKp, TAG.Admin, poolAddr)).endCell();
+            const signature = beginCell()
+                .storeBuffer(signVoucher(voucher, signKp, TAG.Admin, poolAddr))
+                .endCell();
             const body = beginCell()
                 .store(storeSetAdmin({ $$type: 'SetAdmin', voucherCell: voucher, signature }))
                 .endCell();
