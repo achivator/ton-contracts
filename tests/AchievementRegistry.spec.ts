@@ -285,6 +285,10 @@ describe('AchievementRegistry', () => {
     });
 
     it('has no way to pay TON out, for the owner or anyone else', async () => {
+        // Freeze the clock: with wall-clock time, a second boundary between
+        // reading `before` and the next transaction charges 1 nanoton of
+        // storage rent and the balance check below fails at random.
+        blockchain.now = Math.floor(Date.now() / 1000);
         await register(admin, registerVoucher(admin.address));
         const before = (await blockchain.getContract(registry.address)).balance;
         for (const who of [owner, stranger]) {
