@@ -7,7 +7,7 @@ import { AchievementRegistry, storeMintVoucher, storeRegisterVoucher } from '../
 import { AchievementItem } from '../../wrappers/AchievementItem';
 import { AchievementItem as AchievementItemAsDeployed } from '../../build/AchievementRegistry/tact_AchievementItem';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from '../helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from '../helpers/vouchers';
 
 const CHAT_ID = -1001234567890n;
 const URL = 'https://achivator.cc/metadata/first-steps.json';
@@ -70,7 +70,9 @@ describe('AchievementItem PoC', () => {
                 contentHash: 123n,
                 royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
                 voucherCell: rv,
-                signature: signatureCell(signVoucher(rv, backend, TAG.Register, registry.address)),
+                signature: signatureCell(
+                    signVoucher(rv, backend, TAG.Register, registry.address, globalIdOf(blockchain)),
+                ),
             },
         );
     });
@@ -94,7 +96,9 @@ describe('AchievementItem PoC', () => {
             {
                 $$type: 'MintAchievement',
                 voucherCell,
-                signature: signatureCell(signVoucher(voucherCell, backend, TAG.Mint, registry.address)),
+                signature: signatureCell(
+                    signVoucher(voucherCell, backend, TAG.Mint, registry.address, globalIdOf(blockchain)),
+                ),
             },
         );
     }

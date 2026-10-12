@@ -10,7 +10,7 @@ import {
 import { AchievementItem } from '../wrappers/AchievementItem';
 import { storeClaimVoucher } from '../wrappers/ChatPool';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
 
 // The miniapp's voucher lib (see MiniappIntegration.spec.ts for the pools).
 const voucherLib: any = require('../../miniapp/src/lib/ton/vouchers.js');
@@ -66,7 +66,13 @@ describe('AchievementRegistry', () => {
             .store(storeRegisterVoucher({ $$type: 'RegisterVoucher', chatId: CHAT_ID, registrant, expiry: farFuture }))
             .endCell();
         const signature = signatureCell(
-            signVoucher(voucherCell, backend, opts.tag ?? TAG.Register, opts.target ?? registry.address),
+            signVoucher(
+                voucherCell,
+                backend,
+                opts.tag ?? TAG.Register,
+                opts.target ?? registry.address,
+                globalIdOf(blockchain),
+            ),
         );
         return { voucherCell, signature };
     }
@@ -105,7 +111,9 @@ describe('AchievementRegistry', () => {
         return {
             $$type: 'MintAchievement' as const,
             voucherCell,
-            signature: signatureCell(signVoucher(voucherCell, backend, TAG.Mint, registry.address)),
+            signature: signatureCell(
+                signVoucher(voucherCell, backend, TAG.Mint, registry.address, globalIdOf(blockchain)),
+            ),
         };
     }
 
@@ -146,7 +154,9 @@ describe('AchievementRegistry', () => {
         for (const tag of [TAG.Claim, TAG.Register]) {
             const res = await register(member, {
                 voucherCell: claimCell,
-                signature: signatureCell(signVoucher(claimCell, backend, tag, registry.address)),
+                signature: signatureCell(
+                    signVoucher(claimCell, backend, tag, registry.address, globalIdOf(blockchain)),
+                ),
             });
             expect(res.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });
         }
@@ -276,11 +286,14 @@ describe('AchievementRegistry', () => {
             .endCell();
         expect(libVoucher.toBoc().toString('base64')).toEqual(genVoucher.toBoc().toString('base64'));
 
+        // as the mint route does: the registry's own version, the network's id
         const signature: Buffer = voucherLib.signVoucher(libVoucher, BACKEND_SECRET_HEX, {
             tag: TAGS.Mint,
             target: registry.address,
+            version: Number(await registry.getVersion()),
+            globalId: globalIdOf(blockchain),
         });
-        expect(signature).toEqual(signVoucher(genVoucher, backend, TAG.Mint, registry.address));
+        expect(signature).toEqual(signVoucher(genVoucher, backend, TAG.Mint, registry.address, globalIdOf(blockchain)));
         const body: Cell = voucherLib.buildMintBody({ voucherCell: libVoucher, signature });
         const genBody = beginCell()
             .store(
@@ -301,7 +314,7 @@ describe('AchievementRegistry', () => {
     // ---- no platform fee: nothing can be withdrawn ----
 
     it('reports the protocol version', async () => {
-        expect(await registry.getVersion()).toEqual(2n);
+        expect(await registry.getVersion()).toEqual(3n);
     });
 
     it('has no way to pay TON out, for the owner or anyone else', async () => {
@@ -364,7 +377,7 @@ describe('AchievementRegistry', () => {
             .endCell();
         const reg = await register(admin, {
             voucherCell: rv,
-            signature: signatureCell(signVoucher(rv, backend, TAG.Register, registry.address)),
+            signature: signatureCell(signVoucher(rv, backend, TAG.Register, registry.address, globalIdOf(blockchain))),
         });
         expect(reg.transactions).toHaveTransaction({ from: admin.address, to: registry.address, success: false });
         expect(await registry.getTemplatesCount()).toEqual(0n);
@@ -388,7 +401,7 @@ describe('AchievementRegistry', () => {
             {
                 $$type: 'MintAchievement',
                 voucherCell: mv,
-                signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address)),
+                signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address, globalIdOf(blockchain))),
             },
         );
         expect(mint.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });
@@ -422,7 +435,7 @@ describe('AchievementRegistry', () => {
             .endCell();
         const reg = await register(admin, {
             voucherCell: rv,
-            signature: signatureCell(signVoucher(rv, backend, TAG.Register, registry.address)),
+            signature: signatureCell(signVoucher(rv, backend, TAG.Register, registry.address, globalIdOf(blockchain))),
         });
         expect(reg.transactions).toHaveTransaction({ from: admin.address, to: registry.address, success: false });
         expect(await registry.getTemplatesCount()).toEqual(0n);
@@ -447,7 +460,7 @@ describe('AchievementRegistry', () => {
             {
                 $$type: 'MintAchievement',
                 voucherCell: mv,
-                signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address)),
+                signature: signatureCell(signVoucher(mv, backend, TAG.Mint, registry.address, globalIdOf(blockchain))),
             },
         );
         expect(mint.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: false });

@@ -6,7 +6,7 @@ import { keyPairFromSeed, KeyPair } from '@ton/crypto';
 import { AchievementRegistry, storeMintVoucher, storeRegisterVoucher } from '../../wrappers/AchievementRegistry';
 import { AchievementItem } from '../../wrappers/AchievementItem';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from '../helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from '../helpers/vouchers';
 
 const CHAT_ID = -1001234567890n;
 const URL = 'https://achivator.cc/metadata/first-steps.json';
@@ -61,7 +61,10 @@ describe('AchievementRegistry PoC', () => {
         const voucherCell = beginCell()
             .store(storeRegisterVoucher({ $$type: 'RegisterVoucher', chatId, registrant, expiry: farFuture }))
             .endCell();
-        return { voucherCell, signature: signatureCell(signVoucher(voucherCell, backend, TAG.Register, target)) };
+        return {
+            voucherCell,
+            signature: signatureCell(signVoucher(voucherCell, backend, TAG.Register, target, globalIdOf(blockchain))),
+        };
     }
 
     function mintMsg(target: Address, templateId: bigint, recipient: Address, tgUserId: bigint, nonce: bigint) {
@@ -73,7 +76,7 @@ describe('AchievementRegistry PoC', () => {
         return {
             $$type: 'MintAchievement' as const,
             voucherCell,
-            signature: signatureCell(signVoucher(voucherCell, backend, TAG.Mint, target)),
+            signature: signatureCell(signVoucher(voucherCell, backend, TAG.Mint, target, globalIdOf(blockchain))),
         };
     }
 

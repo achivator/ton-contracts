@@ -12,7 +12,10 @@ import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import { AchievementRegistry, storeMintVoucher, storeRegisterVoucher } from '../wrappers/AchievementRegistry';
 import '@ton/test-utils';
-import { globalIdOf, setGlobalId, signatureCell, TAG } from './helpers/vouchers';
+import { NetworkProvider } from '@ton/blueprint';
+import { networkGlobalId, voucherSignerFor } from '../scripts/network';
+import { GLOBAL_ID, signLegacyVoucher } from '../wrappers/Vouchers';
+import { globalIdOf, setGlobalId, signatureCell, signVoucher, TAG } from './helpers/vouchers';
 
 const MAINNET = -239;
 const TESTNET = -3;
@@ -48,6 +51,20 @@ function errorCode(contract: { abi: ContractABI }, message: string): number {
 const backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
 describe('vouchers are bound to the network (X-2)', () => {
+    it('the wrappers sign exactly these envelopes', () => {
+        expect(GLOBAL_ID).toEqual({ mainnet: MAINNET, testnet: TESTNET });
+        const voucher = beginCell().storeUint(42, 64).endCell();
+        const target = new Address(0, Buffer.alloc(32, 5));
+        for (const globalId of [MAINNET, TESTNET]) {
+            expect(signVoucher(voucher, backend, TAG.Claim, target, globalId)).toEqual(
+                signForNetwork(voucher, backend, TAG.Claim, target, globalId),
+            );
+        }
+        expect(signLegacyVoucher(voucher, backend, TAG.Claim, target)).toEqual(
+            signUnbound(voucher, backend, TAG.Claim, target),
+        );
+    });
+
     describe('ChatPool', () => {
         type Net = {
             bc: Blockchain;
@@ -344,6 +361,66 @@ describe('vouchers are bound to the network (X-2)', () => {
                 success: true,
             });
             expect(await testnet.registry.getIsMinted(0n, 555n)).toBe(true);
+        });
+    });
+
+    describe('scripts', () => {
+        const fakeProvider = (network: 'mainnet' | 'testnet' | 'custom', bc?: Blockchain) =>
+            ({ network: () => network, provider: (a: Address) => bc!.provider(a) }) as unknown as NetworkProvider;
+
+        it('derive the global id from the blueprint network', () => {
+            expect(networkGlobalId(fakeProvider('mainnet'))).toBe(MAINNET);
+            expect(networkGlobalId(fakeProvider('testnet'))).toBe(TESTNET);
+            const saved = process.env.TON_GLOBAL_ID;
+            try {
+                delete process.env.TON_GLOBAL_ID;
+                expect(() => networkGlobalId(fakeProvider('custom'))).toThrow(/TON_GLOBAL_ID/);
+                process.env.TON_GLOBAL_ID = '-217';
+                expect(networkGlobalId(fakeProvider('custom'))).toBe(-217);
+            } finally {
+                if (saved === undefined) delete process.env.TON_GLOBAL_ID;
+                else process.env.TON_GLOBAL_ID = saved;
+            }
+        });
+
+        it("sign in the envelope of the pool's version for the blueprint network", async () => {
+            const bc = await Blockchain.create();
+            setGlobalId(bc, TESTNET);
+            const owner = await bc.treasury('owner');
+            const creator = await bc.treasury('creator');
+            const master = bc.openContract(await DistributorMaster.fromInit(owner.address, pub(backend)));
+            await master.send(owner.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
+            await master.send(creator.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
+            const pool = bc.openContract(ChatPool.fromAddress(await master.getPoolAddress(CHAT_ID)));
+            const voucherCell = beginCell()
+                .store(
+                    storeAdminInitVoucher({
+                        $$type: 'AdminInitVoucher',
+                        chatId: CHAT_ID,
+                        master: master.address,
+                        admin: creator.address,
+                        expiry: farFuture(),
+                    }),
+                )
+                .endCell();
+            const setAdmin = (sig: Buffer) =>
+                pool.send(
+                    creator.getSender(),
+                    { value: toNano('0.05') },
+                    { $$type: 'SetAdmin', voucherCell, signature: signatureCell(sig) },
+                );
+
+            // run against mainnet by mistake: the testnet pool rejects it
+            const wrong = await voucherSignerFor(fakeProvider('mainnet', bc), pool.address);
+            expect((await setAdmin(wrong(voucherCell, backend, TAG.Admin))).transactions).toHaveTransaction({
+                to: pool.address,
+                success: false,
+            });
+            const right = await voucherSignerFor(fakeProvider('testnet', bc), pool.address);
+            expect((await setAdmin(right(voucherCell, backend, TAG.Admin))).transactions).toHaveTransaction({
+                to: pool.address,
+                success: true,
+            });
         });
     });
 });

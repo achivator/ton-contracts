@@ -10,7 +10,7 @@ import {
 } from '../wrappers/ChatPool';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
 
 const CHAT_ID = 1001234567890n;
 const JETTON_TRANSFER_OP = 0x0f8a7ea5;
@@ -30,6 +30,7 @@ function depositForwardPayload(args: {
     expiry: bigint;
     kp: KeyPair;
     pool: Address;
+    globalId: number;
 }): Cell {
     const voucher = beginCell()
         .store(
@@ -42,7 +43,7 @@ function depositForwardPayload(args: {
             }),
         )
         .endCell();
-    const signature = signVoucher(voucher, args.kp, TAG.Deposit, args.pool);
+    const signature = signVoucher(voucher, args.kp, TAG.Deposit, args.pool, args.globalId);
     return beginCell().storeRef(voucher).storeBuffer(signature).endCell();
 }
 
@@ -53,6 +54,7 @@ function setAdminVoucher(args: {
     expiry: bigint;
     kp: KeyPair;
     pool: Address;
+    globalId: number;
 }): { voucherCell: Cell; signature: Cell } {
     const voucher = beginCell()
         .store(
@@ -65,7 +67,7 @@ function setAdminVoucher(args: {
             }),
         )
         .endCell();
-    const signature = signVoucher(voucher, args.kp, TAG.Admin, args.pool);
+    const signature = signVoucher(voucher, args.kp, TAG.Admin, args.pool, args.globalId);
     return { voucherCell: voucher, signature: signatureCell(signature) };
 }
 
@@ -78,12 +80,14 @@ describe('Token Distribution', () => {
     let jettonWallet: SandboxContract<TreasuryContract>; // the pool's jetton wallet
     let backend: KeyPair;
     let pool: SandboxContract<ChatPool>;
+    let globalId: number; // the sandbox network's, as the contracts read it
 
     const jettonMaster = new Address(0, Buffer.alloc(32, 3));
     const farFuture = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
     beforeEach(async () => {
         blockchain = await Blockchain.create();
+        globalId = globalIdOf(blockchain);
         deployer = await blockchain.treasury('deployer');
         master = await blockchain.treasury('master');
         admin = await blockchain.treasury('admin');
@@ -110,6 +114,7 @@ describe('Token Distribution', () => {
             admin: admin.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         return pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...v });
@@ -123,6 +128,7 @@ describe('Token Distribution', () => {
             expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         return pool.send(
@@ -181,7 +187,7 @@ describe('Token Distribution', () => {
             )
             .endCell();
         const signature = signatureCell(
-            signVoucher(voucher, backend, args.tag ?? TAG.Claim, args.target ?? pool.address),
+            signVoucher(voucher, backend, args.tag ?? TAG.Claim, args.target ?? pool.address, globalId),
         );
         return { $$type: 'Claim' as const, voucherCell: voucher, signature };
     }
@@ -224,6 +230,7 @@ describe('Token Distribution', () => {
             expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         const res = await pool.send(
@@ -257,6 +264,7 @@ describe('Token Distribution', () => {
             expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: wrongKey,
+            globalId,
             pool: pool.address,
         });
         const res = await pool.send(
@@ -274,7 +282,7 @@ describe('Token Distribution', () => {
     });
 
     it('reports the protocol version the backend checks before signing', async () => {
-        expect(await pool.getVersion()).toEqual(2n);
+        expect(await pool.getVersion()).toEqual(3n);
     });
 
     it('pays out a valid claim and blocks nonce replay', async () => {
@@ -293,7 +301,7 @@ describe('Token Distribution', () => {
                 }),
             )
             .endCell();
-        const signature = signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address));
+        const signature = signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address, globalId));
 
         const res = await pool.send(
             user.getSender(),
@@ -343,6 +351,7 @@ describe('Token Distribution', () => {
             admin: admin.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         await pool.send(
@@ -388,6 +397,7 @@ describe('Token Distribution', () => {
             admin: admin.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         const poolBefore = (await blockchain.getContract(pool.address)).balance;
@@ -434,6 +444,7 @@ describe('Token Distribution', () => {
             admin: admin.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         const res = await pool.send(
@@ -459,6 +470,7 @@ describe('Token Distribution', () => {
             admin: admin.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         await pool.send(
@@ -478,6 +490,7 @@ describe('Token Distribution', () => {
             admin: user.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         const bad = await pool.send(
@@ -503,6 +516,7 @@ describe('Token Distribution', () => {
             admin: user.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         const ok = await pool.send(
@@ -581,6 +595,7 @@ describe('Token Distribution', () => {
             admin: admin.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         };
 
@@ -659,6 +674,7 @@ describe('Token Distribution', () => {
             expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         const res = await pool.send(
@@ -688,6 +704,7 @@ describe('Token Distribution', () => {
             expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
         };
         for (const forwardPayload of [
             depositForwardPayload({ ...base, pool: other.address }),
@@ -696,7 +713,7 @@ describe('Token Distribution', () => {
                 const voucher = beginCell()
                     .store(storeDepositVoucher({ $$type: 'DepositVoucher', ...base }))
                     .endCell();
-                const sig = signVoucher(voucher, backend, TAG.Claim, pool.address);
+                const sig = signVoucher(voucher, backend, TAG.Claim, pool.address, globalId);
                 return beginCell().storeRef(voucher).storeBuffer(sig).endCell();
             })(),
         ]) {
@@ -725,6 +742,7 @@ describe('Token Distribution', () => {
             expectedJettonWallet: rogueWallet.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         await pool.send(
@@ -824,6 +842,7 @@ describe('Token Distribution', () => {
             admin: admin.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', voucherCell, signature });
@@ -860,6 +879,7 @@ describe('Token Distribution', () => {
             expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
+            globalId,
             pool: pool.address,
         });
         const res = await pool.send(
@@ -1004,7 +1024,7 @@ describe('Token Distribution', () => {
         expect(oldKey.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
 
         const voucher = claimVoucher({ amount: toNano('1'), nonce: 1n });
-        voucher.signature = signatureCell(signVoucher(voucher.voucherCell, fresh, TAG.Claim, pool.address));
+        voucher.signature = signatureCell(signVoucher(voucher.voucherCell, fresh, TAG.Claim, pool.address, globalId));
         const newKey = await pool.send(user.getSender(), { value: toNano('0.1') }, voucher);
         expect(newKey.transactions).toHaveTransaction({ from: pool.address, to: jettonWallet.address, success: true });
     });
@@ -1140,9 +1160,15 @@ describe('Token Distribution', () => {
             .endCell();
         const cases = [
             // right target, wrong tag
-            { voucherCell: voucher, signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address)) },
+            {
+                voucherCell: voucher,
+                signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address, globalId)),
+            },
             // right tag, wrong target
-            { voucherCell: voucher, signature: signatureCell(signVoucher(voucher, backend, TAG.Admin, other.address)) },
+            {
+                voucherCell: voucher,
+                signature: signatureCell(signVoucher(voucher, backend, TAG.Admin, other.address, globalId)),
+            },
         ];
         for (const v of cases) {
             const res = await pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...v });
@@ -1173,7 +1199,7 @@ describe('Token Distribution', () => {
             {
                 $$type: 'Claim',
                 voucherCell: voucher,
-                signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address)),
+                signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address, globalId)),
             },
         );
         expect(res.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
@@ -1197,7 +1223,7 @@ describe('Token Distribution', () => {
             .endCell();
         const forwardPayload = beginCell()
             .storeRef(voucher)
-            .storeBuffer(signVoucher(voucher, backend, TAG.Deposit, pool.address))
+            .storeBuffer(signVoucher(voucher, backend, TAG.Deposit, pool.address, globalId))
             .endCell();
         const res = await pool.send(
             jettonWallet.getSender(),
@@ -1240,7 +1266,7 @@ describe('DistributorMaster', () => {
     });
 
     it('reports the protocol version', async () => {
-        expect(await masterC.getVersion()).toEqual(2n);
+        expect(await masterC.getVersion()).toEqual(3n);
     });
 
     it('derives a deterministic, chat-specific pool address', async () => {

@@ -14,13 +14,19 @@ import {
 } from '../../wrappers/ChatPool';
 import { DistributorMaster } from '../../wrappers/DistributorMaster';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from '../helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from '../helpers/vouchers';
 
 const CHAT_ID = -1001234567890n;
 const FAR = 1n << 40n; // expiry far in the future, independent of blockchain.now
 const pub = (kp: KeyPair) => BigInt('0x' + kp.publicKey.toString('hex'));
 
-function depositPayload(kp: KeyPair, pool: Address, jettonMaster: Address, expectedJettonWallet: Address): Cell {
+function depositPayload(
+    kp: KeyPair,
+    pool: Address,
+    jettonMaster: Address,
+    expectedJettonWallet: Address,
+    globalId: number,
+): Cell {
     const v = beginCell()
         .store(
             storeDepositVoucher({
@@ -32,7 +38,7 @@ function depositPayload(kp: KeyPair, pool: Address, jettonMaster: Address, expec
             }),
         )
         .endCell();
-    const sig = signVoucher(v, kp, TAG.Deposit, pool);
+    const sig = signVoucher(v, kp, TAG.Deposit, pool, globalId);
     // ref-wrapped (stock wallet / TestJettonWallet shape)
     return beginCell().storeUint(1, 1).storeRef(beginCell().storeRef(v).storeBuffer(sig).endCell()).endCell();
 }
@@ -44,6 +50,7 @@ function claimMsg(
     jettonMaster: Address,
     amount: bigint,
     nonce: bigint,
+    globalId: number,
 ) {
     const v = beginCell()
         .store(
@@ -58,17 +65,21 @@ function claimMsg(
             }),
         )
         .endCell();
-    return { $$type: 'Claim' as const, voucherCell: v, signature: signatureCell(signVoucher(v, kp, TAG.Claim, pool)) };
+    return {
+        $$type: 'Claim' as const,
+        voucherCell: v,
+        signature: signatureCell(signVoucher(v, kp, TAG.Claim, pool, globalId)),
+    };
 }
 
-function adminMsg(kp: KeyPair, pool: Address, master: Address, admin: Address) {
+function adminMsg(kp: KeyPair, pool: Address, master: Address, admin: Address, globalId: number) {
     const v = beginCell()
         .store(storeAdminInitVoucher({ $$type: 'AdminInitVoucher', chatId: CHAT_ID, master, admin, expiry: FAR }))
         .endCell();
     return {
         $$type: 'SetAdmin' as const,
         voucherCell: v,
-        signature: signatureCell(signVoucher(v, kp, TAG.Admin, pool)),
+        signature: signatureCell(signVoucher(v, kp, TAG.Admin, pool, globalId)),
     };
 }
 
@@ -120,7 +131,7 @@ describe('ChatPool PoCs', () => {
         const r = await pool.send(
             admin.getSender(),
             { value: toNano('0.05') },
-            adminMsg(backend, pool.address, master.address, admin.address),
+            adminMsg(backend, pool.address, master.address, admin.address, globalIdOf(bc)),
         );
         expect(r.transactions).toHaveTransaction({ to: pool.address, success: true });
     });
@@ -138,7 +149,7 @@ describe('ChatPool PoCs', () => {
                 responseDestination: admin.address,
                 customPayload: null,
                 forwardTonAmount: toNano('0.15'),
-                forwardPayload: depositPayload(backend, pool.address, jm, expected),
+                forwardPayload: depositPayload(backend, pool.address, jm, expected, globalIdOf(bc)),
             },
         );
     }
@@ -159,7 +170,13 @@ describe('ChatPool PoCs', () => {
                 queryId: 0n,
                 amount: toNano('1000000'),
                 sender: evil.address,
-                forwardPayload: depositPayload(backend /* leaked */, pool.address, minter.address, evil.address),
+                forwardPayload: depositPayload(
+                    backend /* leaked */,
+                    pool.address,
+                    minter.address,
+                    evil.address,
+                    globalIdOf(bc),
+                ),
             },
         );
         expect(forged.transactions).toHaveTransaction({ from: evil.address, to: pool.address, success: true });
@@ -177,7 +194,7 @@ describe('ChatPool PoCs', () => {
         const c = await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, toNano('10'), 1n),
+            claimMsg(backend, pool.address, user.address, minter.address, toNano('10'), 1n, globalIdOf(bc)),
         );
         // the payout goes to the attacker contract, the nonce is burnt, user gets nothing
         expect(c.transactions).toHaveTransaction({ from: pool.address, to: evil.address, success: true });
@@ -203,7 +220,7 @@ describe('ChatPool PoCs', () => {
         await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, toNano('50'), 5n),
+            claimMsg(backend, pool.address, user.address, minter.address, toNano('50'), 5n, globalIdOf(bc)),
         );
         // (the transfer above succeeded; replay the bounce the wallet would emit
         // for it, exactly like tests/Distributor.spec.ts does)
@@ -230,14 +247,14 @@ describe('ChatPool PoCs', () => {
         const a = await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, toNano('100'), 1n),
+            claimMsg(backend, pool.address, user.address, minter.address, toNano('100'), 1n, globalIdOf(bc)),
         );
         expect(a.transactions).toHaveTransaction({ from: pool.address, to: poolWallet, success: true });
         bc.now = midnight;
         const b = await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, toNano('90'), 2n),
+            claimMsg(backend, pool.address, user.address, minter.address, toNano('90'), 2n, globalIdOf(bc)),
         );
         expect(b.transactions).toHaveTransaction({ from: pool.address, to: poolWallet, success: true });
         expect(await walletBal(user.address)).toEqual(toNano('190'));
@@ -252,13 +269,13 @@ describe('ChatPool PoCs', () => {
         await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, toNano('100'), 1n),
+            claimMsg(backend, pool.address, user.address, minter.address, toNano('100'), 1n, globalIdOf(bc)),
         );
         bc.now = midnight + 10;
         await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, toNano('90'), 2n),
+            claimMsg(backend, pool.address, user.address, minter.address, toNano('90'), 2n, globalIdOf(bc)),
         );
         expect(await pool.getClaimableToday(minter.address)).toEqual(0n);
         // yesterday's nonce-1 transfer bounces now
@@ -296,7 +313,7 @@ describe('ChatPool PoCs', () => {
         const c = await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, toNano('1'), 1n),
+            claimMsg(backend, pool.address, user.address, minter.address, toNano('1'), 1n, globalIdOf(bc)),
         );
         expect(c.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
     });
@@ -308,7 +325,7 @@ describe('ChatPool PoCs', () => {
         await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, 1n, 1n),
+            claimMsg(backend, pool.address, user.address, minter.address, 1n, 1n, globalIdOf(bc)),
         );
         await realDeposit(toNano('10000'));
         expect(await pool.getBalanceOf(minter.address)).toBeGreaterThan(toNano('10000'));
@@ -327,7 +344,7 @@ describe('ChatPool PoCs', () => {
         await pool.send(
             user.getSender(),
             { value: toNano('0.1') },
-            claimMsg(backend, pool.address, user.address, minter.address, 1n, 1n),
+            claimMsg(backend, pool.address, user.address, minter.address, 1n, 1n, globalIdOf(bc)),
         );
         const s0 = await stats();
         const N = 200n;
@@ -336,7 +353,7 @@ describe('ChatPool PoCs', () => {
             await pool.send(
                 user.getSender(),
                 { value: toNano('0.1') },
-                claimMsg(backend, pool.address, user.address, minter.address, 1n, n * 7919n),
+                claimMsg(backend, pool.address, user.address, minter.address, 1n, n * 7919n, globalIdOf(bc)),
             );
         }
         const s1 = await stats();
@@ -370,7 +387,13 @@ describe('ChatPool PoCs', () => {
         expect(testnet.poolAddr.equals(mainnet.poolAddr)).toBe(true);
 
         // an admin voucher issued by the testnet backend...
-        const v = adminMsg(backend, testnet.poolAddr, testnet.m.address, testnet.creator.address);
+        const v = adminMsg(
+            backend,
+            testnet.poolAddr,
+            testnet.m.address,
+            testnet.creator.address,
+            globalIdOf(testnet.b),
+        );
         // ...is accepted by the mainnet pool
         const mp = mainnet.b.openContract(ChatPool.fromAddress(mainnet.poolAddr));
         const r = await mp.send(mainnet.creator.getSender(), { value: toNano('0.05') }, v);
@@ -390,7 +413,7 @@ describe('ChatPool PoCs', () => {
         await p2.send(
             attacker.getSender(),
             { value: toNano('0.05') },
-            adminMsg(backend, p2.address, master2.address, attacker.address),
+            adminMsg(backend, p2.address, master2.address, attacker.address, globalIdOf(bc)),
         );
         expect((await p2.getPoolAdmin())!.equals(attacker.address)).toBe(true);
 
@@ -408,7 +431,7 @@ describe('ChatPool PoCs', () => {
                 }),
             )
             .endCell();
-        const sig = signVoucher(v, backend, TAG.Deposit, p2.address);
+        const sig = signVoucher(v, backend, TAG.Deposit, p2.address, globalIdOf(bc));
         await w.send(
             admin.getSender(),
             { value: toNano('0.3') },

@@ -19,7 +19,8 @@ import {
 } from '../wrappers/ChatPool';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import '@ton/test-utils';
-import { signVoucher, TAG } from './helpers/vouchers';
+import { signLegacyVoucher } from '../wrappers/Vouchers';
+import { globalIdOf, signVoucher, TAG } from './helpers/vouchers';
 
 // The miniapp signs and builds all wire cells with miniapp/src/lib/ton/vouchers.js
 // (plain CJS with its own @ton/* deps, pinned back to this package through the
@@ -170,19 +171,37 @@ describe('miniapp lib <-> contracts', () => {
         expect(BigInt(tags.Register)).toEqual(TAG.Register);
         expect(BigInt(tags.Mint)).toEqual(TAG.Mint);
         const target = master.address;
+        // v3 envelope: tag, network global id, target, ref(voucher).
+        const globalId = globalIdOf(blockchain);
         const genEnvelope = beginCell()
-            .store(storeSignedVoucher({ $$type: 'SignedVoucher', tag: TAG.Claim, target, voucher: genClaimVoucher }))
+            .store(
+                storeSignedVoucher({
+                    $$type: 'SignedVoucher',
+                    tag: TAG.Claim,
+                    globalId: BigInt(globalId),
+                    target,
+                    voucher: genClaimVoucher,
+                }),
+            )
             .endCell();
-        expect(boc(voucherLib.signedVoucherCell(libClaimVoucher, { tag: tags.Claim, target }))).toEqual(
-            boc(genEnvelope),
+        const v3 = { tag: tags.Claim, target, version: 3, globalId };
+        expect(boc(voucherLib.signedVoucherCell(libClaimVoucher, v3))).toEqual(boc(genEnvelope));
+        const libSignature: Buffer = voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX, v3);
+        expect(libSignature).toEqual(signVoucher(libClaimVoucher, backend, TAG.Claim, target, globalId));
+        // legacy v2 envelope (no network) for pools that report version() == 2
+        const v2 = { tag: tags.Claim, target, version: 2 };
+        expect(voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX, v2)).toEqual(
+            signLegacyVoucher(libClaimVoucher, backend, TAG.Claim, target),
         );
-        const libSignature: Buffer = voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX, {
-            tag: tags.Claim,
-            target,
-        });
-        expect(libSignature).toEqual(signVoucher(libClaimVoucher, backend, TAG.Claim, target));
-        // an unsigned-kind call must never silently sign the bare cell
+        // an unsigned-kind call must never silently sign the bare cell, and
+        // the envelope is never guessed
         expect(() => voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX)).toThrow();
+        expect(() =>
+            voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX, { tag: tags.Claim, target }),
+        ).toThrow();
+        expect(() =>
+            voucherLib.signVoucher(libClaimVoucher, BACKEND_SECRET_HEX, { tag: tags.Claim, target, version: 3 }),
+        ).toThrow();
 
         // Admin voucher + SetAdmin + WithdrawRemainder bodies.
         const genAdminVoucher = beginCell()
@@ -373,6 +392,9 @@ describe('miniapp lib <-> contracts', () => {
                     signature: voucherLib.signVoucher(adminVoucher, BACKEND_SECRET_HEX, {
                         tag: TAGS.Admin,
                         target: pool.address,
+                        // as the miniapp routes do: the pool's own version, the network's id
+                        version: Number(await pool.getVersion()),
+                        globalId: globalIdOf(blockchain),
                     }),
                 }),
             ),
@@ -407,6 +429,9 @@ describe('miniapp lib <-> contracts', () => {
         const depositSignature: Buffer = voucherLib.signVoucher(depositVoucher, BACKEND_SECRET_HEX, {
             tag: TAGS.Deposit,
             target: pool.address,
+            // as the miniapp routes do: the pool's own version, the network's id
+            version: Number(await pool.getVersion()),
+            globalId: globalIdOf(blockchain),
         });
         const forwardTonAmount = toNano('0.15');
 
@@ -468,6 +493,8 @@ describe('miniapp lib <-> contracts', () => {
             signature: voucherLib.signVoucher(claimVoucher, BACKEND_SECRET_HEX, {
                 tag: TAGS.Claim,
                 target: pool.address,
+                version: Number(await pool.getVersion()),
+                globalId: globalIdOf(blockchain),
             }),
         });
         const claimRes = await blockchain.sendMessage(
@@ -519,7 +546,7 @@ describe('miniapp lib <-> contracts', () => {
                 toNano('0.15'),
                 voucherLib.buildClaimBody({
                     voucherCell: forgedVoucher,
-                    signature: signVoucher(forgedVoucher, forgedKey, TAG.Claim, pool.address),
+                    signature: signVoucher(forgedVoucher, forgedKey, TAG.Claim, pool.address, globalIdOf(blockchain)),
                 }),
             ),
         );

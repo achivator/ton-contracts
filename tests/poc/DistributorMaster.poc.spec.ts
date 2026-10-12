@@ -8,7 +8,7 @@ import { DistributorMaster } from '../../wrappers/DistributorMaster';
 // ChatPool exactly as compiled inside the master (the code the master really deploys)
 import { ChatPool as MasterChatPool } from '../../build/DistributorMaster/tact_ChatPool';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from '../helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from '../helpers/vouchers';
 
 // PoCs for the DistributorMaster security review. Each test asserts the
 // behaviour the finding describes (i.e. the test PASSES when the issue exists).
@@ -17,14 +17,14 @@ const CHAT_ID = -1001234567890n;
 const pub = (kp: KeyPair) => BigInt('0x' + kp.publicKey.toString('hex'));
 const farFuture = () => BigInt(Math.floor(Date.now() / 1000) + 3600);
 
-function adminVoucher(chatId: bigint, master: Address, admin: Address, kp: KeyPair, pool: Address) {
+function adminVoucher(chatId: bigint, master: Address, admin: Address, kp: KeyPair, pool: Address, globalId: number) {
     const v = beginCell()
         .store(storeAdminInitVoucher({ $$type: 'AdminInitVoucher', chatId, master, admin, expiry: farFuture() }))
         .endCell();
-    return { voucherCell: v, signature: signatureCell(signVoucher(v, kp, TAG.Admin, pool)) };
+    return { voucherCell: v, signature: signatureCell(signVoucher(v, kp, TAG.Admin, pool, globalId)) };
 }
 
-function depositPayload(chatId: bigint, jm: Address, jw: Address, kp: KeyPair, pool: Address): Cell {
+function depositPayload(chatId: bigint, jm: Address, jw: Address, kp: KeyPair, pool: Address, globalId: number): Cell {
     const v = beginCell()
         .store(
             storeDepositVoucher({
@@ -38,7 +38,7 @@ function depositPayload(chatId: bigint, jm: Address, jw: Address, kp: KeyPair, p
         .endCell();
     return beginCell()
         .storeRef(v)
-        .storeBuffer(signVoucher(v, kp, TAG.Deposit, pool))
+        .storeBuffer(signVoucher(v, kp, TAG.Deposit, pool, globalId))
         .endCell();
 }
 
@@ -50,6 +50,7 @@ function claimVoucher(
     nonce: bigint,
     kp: KeyPair,
     pool: Address,
+    globalId: number,
 ) {
     const v = beginCell()
         .store(
@@ -64,7 +65,7 @@ function claimVoucher(
             }),
         )
         .endCell();
-    return { voucherCell: v, signature: signVoucher(v, kp, TAG.Claim, pool) };
+    return { voucherCell: v, signature: signVoucher(v, kp, TAG.Claim, pool, globalId) };
 }
 
 async function deployMaster(bc: Blockchain, owner: SandboxContract<TreasuryContract>, key: bigint) {
@@ -119,12 +120,12 @@ describe('DistributorMaster PoC', () => {
         expect(poolT.address.equals(poolM.address)).toBe(true);
 
         // (a) admin voucher the TESTNET backend issued to the tester is accepted on MAINNET
-        const av = adminVoucher(CHAT_ID, mT.address, tester.address, backend, poolT.address);
+        const av = adminVoucher(CHAT_ID, mT.address, tester.address, backend, poolT.address, globalIdOf(testnet));
         const rM = await poolM.send(testerM.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...av });
         expect(rM.transactions).toHaveTransaction({ to: poolM.address, success: true });
         expect((await poolM.getPoolAdmin())!.equals(tester.address)).toBe(true);
         // the real admin is now locked out of the init path
-        const av2 = adminVoucher(CHAT_ID, mM.address, realAdmin.address, backend, poolM.address);
+        const av2 = adminVoucher(CHAT_ID, mM.address, realAdmin.address, backend, poolM.address, globalIdOf(mainnet));
         const rReal = await poolM.send(
             realAdmin.getSender(),
             { value: toNano('0.05') },
@@ -142,7 +143,10 @@ describe('DistributorMaster PoC', () => {
         await pool2.send(
             adm.getSender(),
             { value: toNano('0.05') },
-            { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m2.address, adm.address, backend, pool2.address) },
+            {
+                $$type: 'SetAdmin',
+                ...adminVoucher(CHAT_ID, m2.address, adm.address, backend, pool2.address, globalIdOf(mainnet2)),
+            },
         );
         const jw = await mainnet2.treasury('jettonWallet');
         const jm = new Address(0, Buffer.alloc(32, 3));
@@ -154,12 +158,21 @@ describe('DistributorMaster PoC', () => {
                 queryId: 0n,
                 amount: toNano('1000'),
                 sender: adm.address,
-                forwardPayload: depositPayload(CHAT_ID, jm, jw.address, backend, pool2.address),
+                forwardPayload: depositPayload(CHAT_ID, jm, jw.address, backend, pool2.address, globalIdOf(mainnet2)),
             },
         );
         expect(await pool2.getBalanceOf(jm)).toEqual(toNano('1000'));
         // voucher produced against the TESTNET pool address
-        const cv = claimVoucher(CHAT_ID, tester.address, jm, toNano('50'), 777n, backend, poolT.address);
+        const cv = claimVoucher(
+            CHAT_ID,
+            tester.address,
+            jm,
+            toNano('50'),
+            777n,
+            backend,
+            poolT.address,
+            globalIdOf(testnet),
+        );
         const attacker2 = await mainnet2.treasury('tester');
         const rc = await pool2.send(
             attacker2.getSender(),
@@ -185,7 +198,10 @@ describe('DistributorMaster PoC', () => {
         await oldPool.send(
             admin.getSender(),
             { value: toNano('0.05') },
-            { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m.address, admin.address, backend, oldPoolAddr) },
+            {
+                $$type: 'SetAdmin',
+                ...adminVoucher(CHAT_ID, m.address, admin.address, backend, oldPoolAddr, globalIdOf(bc)),
+            },
         );
         expect((await oldPool.getPoolAdmin())!.equals(admin.address)).toBe(true);
 
@@ -224,7 +240,14 @@ describe('DistributorMaster PoC', () => {
         expect(rogue.address.equals(officialOldAddr)).toBe(true);
         const d = await rogue.send(attacker.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
         expect(d.transactions).toHaveTransaction({ to: rogue.address, deploy: true, success: true });
-        const v = adminVoucher(OTHER_CHAT, m.address, attacker.address, backend /* leaked */, rogue.address);
+        const v = adminVoucher(
+            OTHER_CHAT,
+            m.address,
+            attacker.address,
+            backend /* leaked */,
+            rogue.address,
+            globalIdOf(bc),
+        );
         const r = await rogue.send(attacker.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...v });
         expect(r.transactions).toHaveTransaction({ to: rogue.address, success: true });
         expect((await rogue.getPoolAdmin())!.equals(attacker.address)).toBe(true);
@@ -313,7 +336,10 @@ describe('DistributorMaster PoC', () => {
         const s = await p.send(
             admin.getSender(),
             { value: toNano('0.05') },
-            { $$type: 'SetAdmin', ...adminVoucher(CHAT_ID, m.address, admin.address, backend, p.address) },
+            {
+                $$type: 'SetAdmin',
+                ...adminVoucher(CHAT_ID, m.address, admin.address, backend, p.address, globalIdOf(bc)),
+            },
         );
         expect(s.transactions).toHaveTransaction({ to: p.address, success: false });
     });

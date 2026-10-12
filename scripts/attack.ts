@@ -12,7 +12,8 @@ import {
     storeSetAdmin,
 } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
-import { signVoucher, TAG } from '../wrappers/Vouchers';
+import { TAG } from '../wrappers/Vouchers';
+import { voucherSignerFor } from './network';
 import { confirmSend, jettonWalletOf, lastTxLt, sleep } from './actors';
 import { reqEnv } from './env';
 
@@ -48,6 +49,8 @@ export async function run(provider: NetworkProvider) {
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
+    // the envelope the pool's version asks for, on this network
+    const signFor = await voucherSignerFor(provider, poolAddr);
     const pool = provider.open(ChatPool.fromAddress(poolAddr));
     const poolJw = await jettonWalletOf(provider, jettonMaster, poolAddr);
 
@@ -66,7 +69,7 @@ export async function run(provider: NetworkProvider) {
             )
             .endCell();
         const signature = beginCell()
-            .storeBuffer(signVoucher(voucher, sigKp, TAG.Claim, poolAddr))
+            .storeBuffer(signFor(voucher, sigKp, TAG.Claim))
             .endCell();
         return beginCell()
             .store(storeClaim({ $$type: 'Claim', voucherCell: voucher, signature }))
@@ -102,7 +105,7 @@ export async function run(provider: NetworkProvider) {
                     }),
                 )
                 .endCell();
-            const signature = signVoucher(voucher, kp, TAG.Claim, poolAddr);
+            const signature = signFor(voucher, kp, TAG.Claim);
             const submitted = beginCell()
                 .store(
                     storeClaimVoucher({
@@ -165,7 +168,7 @@ export async function run(provider: NetworkProvider) {
                     }),
                 )
                 .endCell();
-            const signature = signVoucher(voucher, kp, TAG.Deposit, poolAddr);
+            const signature = signFor(voucher, kp, TAG.Deposit);
             const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
             const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
             const body = beginCell()
@@ -230,7 +233,7 @@ export async function run(provider: NetworkProvider) {
                 )
                 .endCell();
             const signature = beginCell()
-                .storeBuffer(signVoucher(voucher, signKp, TAG.Admin, poolAddr))
+                .storeBuffer(signFor(voucher, signKp, TAG.Admin))
                 .endCell();
             const body = beginCell()
                 .store(storeSetAdmin({ $$type: 'SetAdmin', voucherCell: voucher, signature }))

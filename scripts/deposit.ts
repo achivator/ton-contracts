@@ -3,7 +3,8 @@ import { keyPairFromSeed, sign } from '@ton/crypto';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import { storeDepositVoucher, storeJettonTransfer } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
-import { signVoucher, TAG } from '../wrappers/Vouchers';
+import { TAG } from '../wrappers/Vouchers';
+import { voucherSignerFor } from './network';
 import { reqEnv } from './env';
 import { confirmSend, lastTxLt } from './actors';
 
@@ -24,6 +25,8 @@ export async function run(provider: NetworkProvider) {
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
+    // the envelope the pool's version asks for, on this network
+    const signFor = await voucherSignerFor(provider, poolAddr);
 
     const expectedJettonWallet = await jettonWalletOf(provider, jettonMaster, poolAddr);
     const adminJettonWallet = await jettonWalletOf(provider, jettonMaster, admin);
@@ -40,7 +43,7 @@ export async function run(provider: NetworkProvider) {
             }),
         )
         .endCell();
-    const signature = signVoucher(voucher, kp, TAG.Deposit, poolAddr);
+    const signature = signFor(voucher, kp, TAG.Deposit);
     // The 513-bit payload (voucher ref + 512-bit signature) cannot ride inline
     // in a transfer body (two addresses + fixed fields leave no room), so it
     // travels ref-wrapped as [1 bit][ref payload]. ChatPool accepts both this

@@ -4,7 +4,7 @@ import { keyPairFromSeed, KeyPair } from '@ton/crypto';
 import { flattenTransaction } from '@ton/test-utils';
 import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher } from '../wrappers/ChatPool';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
 import {
     mintToRealWallet,
     REAL_JETTON_WALLETS,
@@ -67,7 +67,9 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
             {
                 $$type: 'SetAdmin',
                 voucherCell: voucher,
-                signature: signatureCell(signVoucher(voucher, backend, TAG.Admin, pool.address)),
+                signature: signatureCell(
+                    signVoucher(voucher, backend, TAG.Admin, pool.address, globalIdOf(blockchain)),
+                ),
             },
         );
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
@@ -100,7 +102,7 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
                 }),
             )
             .endCell();
-        const signature = signVoucher(voucher, signer, TAG.Deposit, pool.address);
+        const signature = signVoucher(voucher, signer, TAG.Deposit, pool.address, globalIdOf(blockchain));
         const body = beginCell()
             .storeUint(JETTON_TRANSFER_OP, 32)
             .storeUint(0, 64)
@@ -135,7 +137,7 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
         return {
             $$type: 'Claim' as const,
             voucherCell: voucher,
-            signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address)),
+            signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address, globalIdOf(blockchain))),
         };
     }
 

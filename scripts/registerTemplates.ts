@@ -4,7 +4,8 @@ import { Address, beginCell, toNano } from '@ton/core';
 import { keyPairFromSeed, sha256_sync } from '@ton/crypto';
 import { NetworkProvider, sleep } from '@ton/blueprint';
 import { AchievementRegistry, storeRegisterVoucher } from '../wrappers/AchievementRegistry';
-import { signVoucher, TAG } from '../wrappers/Vouchers';
+import { TAG } from '../wrappers/Vouchers';
+import { voucherSignerFor } from './network';
 import { reqEnv } from './env';
 
 // Env: ACHIEVEMENT_REGISTRY, BACKEND_SECRET
@@ -23,6 +24,8 @@ export async function run(provider: NetworkProvider) {
     const sender = provider.sender().address;
     if (!sender) throw new Error('Sender address is not defined');
     const registry = provider.open(AchievementRegistry.fromAddress(Address.parse(reqEnv('ACHIEVEMENT_REGISTRY'))));
+    // the envelope the registry's version asks for, on this network
+    const signFor = await voucherSignerFor(provider, registry.address);
     const kp = keyPairFromSeed(Buffer.from(reqEnv('BACKEND_SECRET'), 'hex'));
     const base = process.env.METADATA_BASE ?? 'https://achivator.cc/metadata/items/v1/';
     const royaltyPercent = BigInt(process.env.ROYALTY_PERCENT ?? '5');
@@ -56,7 +59,7 @@ export async function run(provider: NetworkProvider) {
             )
             .endCell();
         const signature = beginCell()
-            .storeBuffer(signVoucher(voucherCell, kp, TAG.Register, registry.address))
+            .storeBuffer(signFor(voucherCell, kp, TAG.Register))
             .endCell();
 
         await registry.send(

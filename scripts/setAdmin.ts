@@ -3,7 +3,8 @@ import { keyPairFromSeed, sign } from '@ton/crypto';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import { ChatPool, storeAdminInitVoucher } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
-import { signVoucher, TAG } from '../wrappers/Vouchers';
+import { TAG } from '../wrappers/Vouchers';
+import { voucherSignerFor } from './network';
 import { reqEnv } from './env';
 import { confirmSend, lastTxLt } from './actors';
 
@@ -26,6 +27,8 @@ export async function run(provider: NetworkProvider) {
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
+    // the envelope the pool's version asks for, on this network
+    const signFor = await voucherSignerFor(provider, poolAddr);
 
     const expiry = process.env.EXPIRY ? BigInt(process.env.EXPIRY) : BigInt(Math.floor(Date.now() / 1000) + 3600);
     const voucher = beginCell()
@@ -40,7 +43,7 @@ export async function run(provider: NetworkProvider) {
         )
         .endCell();
     const signature = beginCell()
-        .storeBuffer(signVoucher(voucher, kp, TAG.Admin, poolAddr))
+        .storeBuffer(signFor(voucher, kp, TAG.Admin))
         .endCell();
 
     const pool = provider.open(ChatPool.fromAddress(poolAddr));

@@ -10,7 +10,7 @@ import {
     storeJettonTransferNotification,
 } from '../wrappers/ChatPool';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
 
 // End-to-end wiring test: real jetton minter -> real jetton wallets -> real
 // ChatPool, mirroring scripts/deployTestJetton.ts + scripts/deposit.ts byte
@@ -81,7 +81,9 @@ describe('TestJetton flow', () => {
                 }),
             )
             .endCell();
-        const signature = signatureCell(signVoucher(voucher, backend, TAG.Admin, target.address));
+        const signature = signatureCell(
+            signVoucher(voucher, backend, TAG.Admin, target.address, globalIdOf(blockchain)),
+        );
         return target.send(
             claimer.getSender(),
             { value: toNano('0.05') },
@@ -117,7 +119,7 @@ describe('TestJetton flow', () => {
                 }),
             )
             .endCell();
-        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address);
+        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address, globalIdOf(blockchain));
         const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
         const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
 
@@ -176,7 +178,7 @@ describe('TestJetton flow', () => {
                 }),
             )
             .endCell();
-        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address);
+        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address, globalIdOf(blockchain));
         const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
         // What a stock TEP-74 wallet forwards verbatim: [1 bit][ref payloadCell].
         const verbatimPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
@@ -276,7 +278,7 @@ describe('TestJetton flow', () => {
                     }),
                 )
                 .endCell();
-            const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address);
+            const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address, globalIdOf(blockchain));
             const forwardPayload = beginCell()
                 .storeUint(1, 1)
                 .storeRef(beginCell().storeRef(voucher).storeBuffer(signature).endCell())
@@ -318,7 +320,9 @@ describe('TestJetton flow', () => {
                     }),
                 )
                 .endCell();
-            const signature = signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address));
+            const signature = signatureCell(
+                signVoucher(voucher, backend, TAG.Claim, pool.address, globalIdOf(blockchain)),
+            );
             return pool.send(
                 recipient.getSender(),
                 { value: toNano('0.15') },
