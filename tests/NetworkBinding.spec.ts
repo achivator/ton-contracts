@@ -13,7 +13,7 @@ import { DistributorMaster } from '../wrappers/DistributorMaster';
 import { AchievementRegistry, storeMintVoucher, storeRegisterVoucher } from '../wrappers/AchievementRegistry';
 import '@ton/test-utils';
 import { NetworkProvider } from '@ton/blueprint';
-import { networkGlobalId, voucherSignerFor } from '../scripts/network';
+import { networkGlobalId, refuseKeySharedWithOtherNetwork, voucherSignerFor } from '../scripts/network';
 import { GLOBAL_ID, signLegacyVoucher } from '../wrappers/Vouchers';
 import { globalIdOf, setGlobalId, signatureCell, signVoucher, TAG } from './helpers/vouchers';
 
@@ -421,6 +421,44 @@ describe('vouchers are bound to the network (X-2)', () => {
                 to: pool.address,
                 success: true,
             });
+        });
+
+        it('refuse to deploy a contract that already exists on the other network', async () => {
+            const address = new Address(0, Buffer.alloc(32, 9));
+            const asked: string[] = [];
+            const lookup = (state: string) => async (network: string) => {
+                asked.push(network);
+                return state;
+            };
+            await expect(
+                refuseKeySharedWithOtherNetwork(
+                    fakeProvider('mainnet'),
+                    address,
+                    'DistributorMaster',
+                    lookup('active'),
+                ),
+            ).rejects.toThrow(/already deployed on testnet/);
+            await expect(
+                refuseKeySharedWithOtherNetwork(
+                    fakeProvider('testnet'),
+                    address,
+                    'DistributorMaster',
+                    lookup('frozen'),
+                ),
+            ).rejects.toThrow(/already deployed on mainnet/);
+            await refuseKeySharedWithOtherNetwork(fakeProvider('mainnet'), address, 'X', lookup('uninitialized'));
+            expect(asked).toEqual(['testnet', 'mainnet', 'testnet']);
+            // custom networks are not checked; an unreachable API only warns
+            await refuseKeySharedWithOtherNetwork(fakeProvider('custom'), address, 'X', lookup('active'));
+            const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                await refuseKeySharedWithOtherNetwork(fakeProvider('mainnet'), address, 'X', async () => {
+                    throw new Error('offline');
+                });
+                expect(warn).toHaveBeenCalledWith(expect.stringMatching(/Could not check testnet/));
+            } finally {
+                warn.mockRestore();
+            }
         });
     });
 });

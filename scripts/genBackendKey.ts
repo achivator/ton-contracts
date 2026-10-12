@@ -1,9 +1,10 @@
 import { keyPairFromSeed } from '@ton/crypto';
 import { randomBytes } from 'crypto';
 
-// Generates the backend ed25519 keypair used to sign deposit and claim
-// vouchers. Run once, then keep BACKEND_SECRET private and pass
-// BACKEND_PUBLIC_KEY to the master deploy.
+// Generates the backend ed25519 keypair used to sign vouchers. Run once per
+// network (testnet and mainnet MUST NOT share a key), then keep
+// BACKEND_SECRET private and pass BACKEND_PUBLIC_KEY to the master and
+// registry deploys of that network.
 export async function run() {
     const seed = randomBytes(32);
     const kp = keyPairFromSeed(seed);

@@ -1,10 +1,17 @@
 import { beginCell, toNano } from '@ton/core';
 import { AchievementRegistry } from '../wrappers/AchievementRegistry';
 import { NetworkProvider } from '@ton/blueprint';
+import { refuseKeySharedWithOtherNetwork } from './network';
 
 // Env: BACKEND_PUBLIC_KEY (256-bit integer or 0x-hex; the key that signs
 //      register/mint vouchers - the same backend key as DistributorMaster)
 //      COLLECTION_URL (default https://achivator.cc/metadata/collection.json)
+//
+// Testnet and mainnet MUST use different backend keys (and should use
+// different owner wallets): with both shared, the registry gets the same
+// address on both networks, and a leak of the loosely handled testnet key
+// would still sign mainnet mints. The deploy refuses when this very registry
+// already exists on the other network.
 //
 // Deploys the AchievementRegistry (the TEP-62 collection of all achievement
 // NFTs). The connected wallet becomes the TEP-62 collection owner; the
@@ -19,6 +26,7 @@ export async function run(provider: NetworkProvider) {
     // TEP-64 off-chain content: 0x01 prefix + URL
     const content = beginCell().storeUint(1, 8).storeStringTail(collectionUrl).endCell();
     const registry = provider.open(await AchievementRegistry.fromInit(owner, backendKey, content));
+    await refuseKeySharedWithOtherNetwork(provider, registry.address, 'AchievementRegistry');
 
     await registry.send(provider.sender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
     await provider.waitForDeploy(registry.address);
