@@ -114,7 +114,7 @@ describe('ChatPool PoCs', () => {
         await minter.send(
             admin.getSender(),
             { value: toNano('0.2') },
-            { $$type: 'Mint', amount: toNano('100000'), recipient: admin.address },
+            { $$type: 'Mint', queryId: 0n, amount: toNano('100000'), recipient: admin.address },
         );
         poolWallet = await minter.getGetWalletAddress(pool.address);
         const r = await pool.send(

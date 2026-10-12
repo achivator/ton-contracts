@@ -1,4 +1,4 @@
-import { Blockchain } from '@ton/sandbox';
+import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox';
 import { NetworkProvider } from '@ton/blueprint';
 import { Address, Sender, SenderArguments } from '@ton/core';
 
@@ -8,20 +8,24 @@ type Network = ReturnType<NetworkProvider['network']>;
 // in tests. `sent` records every message the script sends through sender().
 // Sandbox sends are synchronous, so the sender's "last transaction lt" that
 // scripts poll for confirmation is simply the number of messages sent.
-export function sandboxProvider(blockchain: Blockchain, sender: Sender, network: Network = 'testnet') {
+export function sandboxProvider(
+    blockchain: Blockchain,
+    wallet: SandboxContract<TreasuryContract>,
+    network: Network = 'testnet',
+) {
     const sent: SenderArguments[] = [];
     const recording: Sender = {
-        address: sender.address,
+        address: wallet.address,
         send: async (args) => {
             sent.push(args);
-            await sender.send(args);
+            await wallet.send(args); // unlike getSender(), this also runs the message queue
         },
     };
     const isDeployed = async (a: Address) => (await blockchain.getContract(a)).accountState?.type === 'active';
     const api = {
         isContractDeployed: isDeployed,
         getBalance: async (a: Address) => (await blockchain.getContract(a)).balance,
-        getTransactions: async (a: Address) => (a.equals(sender.address!) ? [{ lt: BigInt(sent.length) }] : []),
+        getTransactions: async (a: Address) => (a.equals(wallet.address) ? [{ lt: BigInt(sent.length) }] : []),
     };
     const provider: NetworkProvider = {
         network: () => network,

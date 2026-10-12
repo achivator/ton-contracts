@@ -1,5 +1,5 @@
 import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox';
-import { Address, toNano } from '@ton/core';
+import { Address, beginCell, toNano } from '@ton/core';
 import { keyPairFromSeed } from '@ton/crypto';
 import '@ton/test-utils';
 import { TestJettonMinter } from '../wrappers/TestJetton';
@@ -8,6 +8,7 @@ import { run as deployTestJetton } from '../scripts/deployTestJetton';
 import { run as mintTestJetton } from '../scripts/mintTestJetton';
 import { run as deposit } from '../scripts/deposit';
 import { jettonBalanceOf } from '../scripts/actors';
+import { decimalsFromContent, parseJettonAmount } from '../scripts/jetton';
 import {
     buildOnchainContent,
     getJettonData,
@@ -68,7 +69,7 @@ describe('test jetton scripts', () => {
 
     it('deployTestJetton deploys TEP-64 on-chain metadata and mints to the deployer', async () => {
         process.env.MINT_AMOUNT = '5';
-        const { provider, sent } = sandboxProvider(blockchain, deployer.getSender());
+        const { provider, sent } = sandboxProvider(blockchain, deployer);
         await deployTestJetton(provider);
 
         const minter = sent[0].to;
@@ -90,14 +91,14 @@ describe('test jetton scripts', () => {
             const alice = await blockchain.treasury('alice');
             const bob = await blockchain.treasury('bob');
             await mintTo(minter.address, alice.address, 7n);
-            const { provider } = sandboxProvider(blockchain, deployer.getSender());
+            const { provider } = sandboxProvider(blockchain, deployer);
             expect(await jettonBalanceOf(provider, minter.address, alice.address)).toEqual(7n);
             expect(await jettonBalanceOf(provider, minter.address, bob.address)).toEqual(0n);
         });
 
         it('surfaces errors instead of reporting a 0 balance', async () => {
             const notAJetton = await blockchain.treasury('not-a-jetton');
-            const { provider } = sandboxProvider(blockchain, deployer.getSender());
+            const { provider } = sandboxProvider(blockchain, deployer);
             await expect(jettonBalanceOf(provider, notAJetton.address, deployer.address)).rejects.toThrow();
         });
     });
@@ -117,7 +118,7 @@ describe('test jetton scripts', () => {
         process.env.CHAT_ID = '-1001234567890';
         process.env.AMOUNT = '2.5';
         process.env.BACKEND_SECRET = Buffer.alloc(32, 7).toString('hex');
-        const { provider, sent } = sandboxProvider(blockchain, admin.getSender());
+        const { provider, sent } = sandboxProvider(blockchain, admin);
         await deposit(provider);
 
         const body = sent[0].body!.beginParse();
@@ -127,4 +128,16 @@ describe('test jetton scripts', () => {
         const poolWallet = await minter.getGetWalletAddress(await master.getPoolAddress(-1001234567890n));
         expect(await jettonBalance(blockchain, poolWallet)).toEqual(2_500_000n);
     }, 30_000);
+
+    it('decimals: TEP-64 default of 9, off-chain metadata needs JETTON_DECIMALS, no silent rounding', () => {
+        expect(decimalsFromContent(buildOnchainContent({ name: 'no decimals key' }))).toEqual(9);
+        expect(decimalsFromContent(buildOnchainContent({ decimals: '6' }))).toEqual(6);
+        const offchain = beginCell().storeUint(1, 8).storeStringTail('https://example.org/jetton.json').endCell();
+        expect(() => decimalsFromContent(offchain)).toThrow(/JETTON_DECIMALS/);
+        expect(decimalsFromContent(offchain, '2')).toEqual(2);
+        expect(parseJettonAmount('2.5', 6)).toEqual(2_500_000n);
+        expect(parseJettonAmount('7', 0)).toEqual(7n);
+        expect(() => parseJettonAmount('0.0000001', 6)).toThrow();
+        expect(() => parseJettonAmount('-1', 6)).toThrow();
+    });
 });

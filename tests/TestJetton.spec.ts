@@ -516,24 +516,36 @@ describe('TestJettonMinter / TestJettonWallet', () => {
         });
 
         // receive_tokens of the reference wallet: excess = value - storage top-up
-        // to 0.01 TON - 0.015 TON gas - forward_ton_amount - 1.5 * forward fee
+        // to 0.01 TON - 0.015 TON gas [- forward_ton_amount - 1.5 * forward fee],
+        // sent with mode 2, so its own forwarding fee comes out of it.
         it('TJW-10: the excess follows the reference wallet formula (storage top-up, then refund)', async () => {
             const bw = await walletOf(bob.address);
-            for (const fresh of [true, false]) {
+            const cases = [
+                { fresh: true, forwardTonAmount: 0n },
+                { fresh: false, forwardTonAmount: 0n },
+                { fresh: false, forwardTonAmount: toNano('0.05') },
+            ];
+            for (const { fresh, forwardTonAmount } of cases) {
                 const tonBefore = (await blockchain.getContract(bw)).balance;
-                const res = await transfer(alice, { amount: 1n });
+                const res = await transfer(alice, { amount: 1n, forwardTonAmount });
                 const tx = res.transactions.find((t) => t.inMessage?.info.dest?.toString() === bw.toString())!;
                 const info = tx.inMessage!.info as any;
-                const fwdFee = (info.forwardFee * 3n) / 2n;
                 const topUp = WALLET_MIN_STORAGE - (tonBefore < WALLET_MIN_STORAGE ? tonBefore : WALLET_MIN_STORAGE);
                 expect(topUp).toEqual(fresh ? WALLET_MIN_STORAGE : 0n);
-                const expected = info.value.coins - topUp - WALLET_GAS - toNano('0.05') - fwdFee;
-                expect(res.transactions).toHaveTransaction({
-                    from: bw,
-                    to: alice.address,
-                    op: OP.excesses,
-                    value: expected,
-                });
+                let refund = info.value.coins - topUp - WALLET_GAS;
+                if (forwardTonAmount > 0n) refund -= forwardTonAmount + (info.forwardFee * 3n) / 2n;
+                const excess = res.transactions
+                    .map(flattenTransaction)
+                    .find((t) => t.from?.equals(bw) && t.to?.equals(alice.address) && t.op === OP.excesses)!;
+                expect(excess).toBeDefined();
+                const action = (tx.description as any).actionPhase;
+                if (forwardTonAmount === 0n) {
+                    // the excess is the only message: its forwarding fee is all of totalFwdFees
+                    expect(excess.value).toEqual(refund - action.totalFwdFees);
+                } else {
+                    expect(excess.value).toBeLessThan(refund);
+                    expect(excess.value).toBeGreaterThan(refund - toNano('0.001'));
+                }
                 expect((await blockchain.getContract(bw)).balance).toBeGreaterThanOrEqual(WALLET_MIN_STORAGE);
             }
         });

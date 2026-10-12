@@ -1,20 +1,20 @@
-import { beginCell, toNano } from '@ton/core';
-import { TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
+import { toNano } from '@ton/core';
+import { onchainJettonContent, TEST_JETTON_CONTENT, TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
 import { NetworkProvider } from '@ton/blueprint';
+import { requireTestnet } from './jetton';
 
 // Deploys the TEP-74 test jetton (testnet only) and mints an initial supply
 // to the connected wallet.
 //
-// Env: MINT_AMOUNT (default 1000000, 9-decimal units)
+// Env: MINT_AMOUNT (default 1000000 whole tokens; the test jetton has 9 decimals)
 export async function run(provider: NetworkProvider) {
+    requireTestnet(provider, 'deployTestJetton');
     const owner = provider.sender().address;
     if (!owner) throw new Error('Owner address is not defined');
     const mintAmount = toNano(process.env.MINT_AMOUNT ?? '1000000');
 
-    const content = beginCell()
-        .storeUint(0, 8)
-        .storeStringTail('achivator test jetton (testnet only)')
-        .endCell();
+    // TEP-64 on-chain metadata so wallets and the miniapp read name/decimals
+    const content = onchainJettonContent(TEST_JETTON_CONTENT);
 
     const minter = provider.open(await TestJettonMinter.fromInit(owner, content));
     await minter.send(provider.sender(), { value: toNano('0.05') }, { $$type: 'Deploy', queryId: 0n });
@@ -22,13 +22,16 @@ export async function run(provider: NetworkProvider) {
     console.log('TestJettonMinter deployed at:', minter.address.toString());
 
     const ownerWalletAddr = await minter.getGetWalletAddress(owner);
-    await minter.send(provider.sender(), { value: toNano('0.15') },
-        { $$type: 'Mint', amount: mintAmount, recipient: owner });
+    await minter.send(
+        provider.sender(),
+        { value: toNano('0.15') },
+        { $$type: 'Mint', queryId: 0n, amount: mintAmount, recipient: owner },
+    );
     await provider.waitForDeploy(ownerWalletAddr);
 
     const wallet = provider.open(TestJettonWallet.fromAddress(ownerWalletAddr));
-    const balance = await wallet.getWalletBalance();
+    const { balance } = await wallet.getGetWalletData();
     console.log('owner jetton wallet  :', ownerWalletAddr.toString());
     console.log('minted               :', mintAmount.toString(), 'balance:', balance.toString());
-    console.log('mintedTotal          :', (await minter.getMintedTotal()).toString());
+    console.log('total supply         :', (await minter.getGetJettonData()).totalSupply.toString());
 }

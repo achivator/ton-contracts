@@ -62,7 +62,7 @@ export async function run(provider: NetworkProvider) {
     const ownerBal = await jettonBalanceOf(provider, jettonMaster, ownerAddr);
     if (ownerBal < total) {
         throw new Error(
-            `Owner jetton balance ${ownerBal} < required ${total}; mint more with: MINT_AMOUNT=1000000 npx blueprint run deployTestJetton --mnemonic`,
+            `Owner jetton balance ${ownerBal} < required ${total}; mint more with: MINT_AMOUNT=1000000 npx blueprint run deployTestJetton --testnet --mnemonic`,
         );
     }
 

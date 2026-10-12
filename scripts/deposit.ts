@@ -1,4 +1,4 @@
-import { Address, beginCell, toNano, TupleReader } from '@ton/core';
+import { Address, beginCell, toNano } from '@ton/core';
 import { keyPairFromSeed, sign } from '@ton/crypto';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import { storeDepositVoucher, storeJettonTransfer } from '../wrappers/ChatPool';
@@ -6,8 +6,11 @@ import { NetworkProvider } from '@ton/blueprint';
 import { signVoucher, TAG } from '../wrappers/Vouchers';
 import { reqEnv } from './env';
 import { confirmSend, lastTxLt } from './actors';
+import { jettonDecimals, jettonWalletAddress as jettonWalletOf, parseJettonAmount } from './jetton';
 
 // Env: MASTER_ADDRESS, JETTON_MASTER, CHAT_ID, AMOUNT, BACKEND_SECRET
+// AMOUNT is in whole tokens, scaled by the decimals in the jetton's
+// get_jetton_data metadata (JETTON_DECIMALS for off-chain metadata).
 //
 // Acts as the chat admin: sends a jetton transfer from the admin's own jetton
 // wallet to the pool, carrying a backend-signed DepositVoucher in the forward
@@ -16,7 +19,7 @@ export async function run(provider: NetworkProvider) {
     const masterAddr = Address.parse(reqEnv('MASTER_ADDRESS'));
     const jettonMaster = Address.parse(reqEnv('JETTON_MASTER'));
     const chatId = BigInt(reqEnv('CHAT_ID'));
-    const amount = toNano(reqEnv('AMOUNT')); // assumes 9-decimal jetton
+    const amount = parseJettonAmount(reqEnv('AMOUNT'), await jettonDecimals(provider, jettonMaster));
     const kp = keyPairFromSeed(Buffer.from(reqEnv('BACKEND_SECRET'), 'hex'));
 
     const admin = provider.sender().address;
@@ -76,15 +79,4 @@ export async function run(provider: NetworkProvider) {
     console.log('  pool jetton wallet   :', expectedJettonWallet.toString());
     console.log('  admin jetton wallet  :', adminJettonWallet.toString());
     await confirmSend(provider, admin, prevLt, 'deposit');
-}
-
-async function jettonWalletOf(
-    provider: NetworkProvider,
-    jettonMaster: Address,
-    owner: Address,
-): Promise<Address> {
-    const res = await provider.provider(jettonMaster).get('get_wallet_address', [
-        { type: 'slice', cell: beginCell().storeAddress(owner).endCell() },
-    ]);
-    return (res.stack as TupleReader).readAddress();
 }
