@@ -10,6 +10,7 @@ export const TAG = {
     Deposit: 0x44455032n, // "DEP2", target = chat pool
     Claim: 0x434c4d31n, // target = chat pool
     Admin: 0x41444d31n, // target = chat pool
+    AdminProposal: 0x41505231n, // "APR1", target = chat pool (admin recovery)
     Register: 0x52454731n, // target = achievement registry
     Mint: 0x4d4e5431n, // target = achievement registry
 };

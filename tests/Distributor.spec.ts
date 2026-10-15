@@ -1336,7 +1336,7 @@ describe('DistributorMaster', () => {
         // a proper activation leaves the deploy value on the pool
         const expected = await masterC.getPoolAddress(CHAT_ID);
         await masterC.send(stranger.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
-        expect((await blockchain.getContract(expected)).balance).toBeGreaterThan(toNano('0.09'));
+        expect((await blockchain.getContract(expected)).balance).toBeGreaterThan(toNano('0.14'));
     });
 
     it('keeps nothing from CreatePool: the pool gets its deploy value, the caller the rest', async () => {
@@ -1350,7 +1350,7 @@ describe('DistributorMaster', () => {
             from: masterC.address,
             to: stranger.address,
             op: EXCESSES_OP,
-            value: (v) => v! > toNano('0.85'),
+            value: (v) => v! > toNano('0.8'),
         });
         const after = (await blockchain.getContract(masterC.address)).balance;
         expect(after).toBeLessThanOrEqual(before);

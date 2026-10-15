@@ -243,7 +243,7 @@ describe('DistributorMaster security regressions', () => {
 
     it('DM-5: the master keeps a storage reserve on Deploy and covers its rent for years', async () => {
         const { bc, owner, user, master } = await freshMaster();
-        const reserve = toNano('0.1'); // MasterStorageReserve
+        const reserve = toNano('0.2'); // MasterStorageReserve
         const afterDeploy = await tonBalance(bc, master.address);
         expect(afterDeploy).toBeGreaterThanOrEqual(reserve);
 
@@ -265,7 +265,7 @@ describe('DistributorMaster security regressions', () => {
         console.log(
             `DM-5: master rent ${(Number(perYear) / 1e9).toFixed(5)} TON/yr; the reserve covers ${years.toFixed(1)} years`,
         );
-        expect(years).toBeGreaterThanOrEqual(10);
+        expect(years).toBeGreaterThanOrEqual(15);
     });
 
     it('DM-6: RotateBackendKey rejects 0 and the current key', async () => {

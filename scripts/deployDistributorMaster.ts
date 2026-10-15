@@ -24,8 +24,8 @@ export async function run(provider: NetworkProvider) {
     const master = provider.open(await DistributorMaster.fromInit(owner, BACKEND_PUBLIC_KEY));
     await refuseKeySharedWithOtherNetwork(provider, master.address, 'DistributorMaster');
 
-    // 0.1 TON stays on the master as its storage reserve (MasterStorageReserve)
-    await master.send(provider.sender(), { value: toNano('0.2') }, { $$type: 'Deploy', queryId: 0n });
+    // 0.2 TON stays on the master as its storage reserve (MasterStorageReserve)
+    await master.send(provider.sender(), { value: toNano('0.3') }, { $$type: 'Deploy', queryId: 0n });
     await provider.waitForDeploy(master.address);
 
     console.log('DistributorMaster deployed at:', master.address.toString());

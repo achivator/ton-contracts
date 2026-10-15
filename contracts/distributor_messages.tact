@@ -62,6 +62,7 @@ message(0xd1735400) TakeWalletAddress {
 const VoucherTagDeposit: Int = 0x44455032;   // "DEP2", target = pool (DEP1 carried a fee)
 const VoucherTagClaim: Int = 0x434c4d31;     // "CLM1", target = pool
 const VoucherTagAdmin: Int = 0x41444d31;     // "ADM1", target = pool
+const VoucherTagAdminProposal: Int = 0x41505231; // "APR1", target = pool
 
 // Carried (as a ref) inside JettonTransferNotification.forwardPayload,
 // followed by a 512-bit ed25519 signature (see SignedVoucher). Protocol v3
@@ -93,6 +94,20 @@ struct AdminInitVoucher {
     chatId: Int as int64;
     master: Address;                 // binds to this master deployment
     admin: Address;                  // wallet allowed to claim / receive the slot
+    expiry: Int as uint64;
+}
+
+// Admin recovery voucher (CP-12): the backend signs it only after verifying
+// (via Telegram initData + Bot API) that the requester is a current chat
+// administrator or the creator, for a pool whose admin wallet is lost or no
+// longer theirs. Submitted by the named wallet itself (ProposeAdmin), it
+// starts a 7-day timelock that the current admin can cancel. seq must equal
+// the pool's adminProposalSeq(), which every cancel and execute bumps, so a
+// voucher can start at most one proposal.
+struct AdminProposalVoucher {
+    chatId: Int as int64;
+    newAdmin: Address;
+    seq: Int as uint32;
     expiry: Int as uint64;
 }
 
@@ -157,8 +172,22 @@ message Claim {
     signature: Slice as remaining;   // 512-bit ed25519 signature, see SignedVoucher
 }
 
+// Admin recovery, see AdminProposalVoucher. Anyone may execute a proposal
+// once its timelock is over; only the current admin may cancel it.
+message ProposeAdmin {
+    voucherCell: Cell;               // serialised AdminProposalVoucher
+    signature: Slice as remaining;   // 512-bit ed25519 signature, see SignedVoucher
+}
+
+message CancelAdminProposal {
+}
+
+message ExecuteAdminProposal {
+}
+
 // Init or rotate the pool admin. Init: the wallet named in the voucher sends
-// this itself. Rotation: the current admin sends it, naming the successor.
+// this itself. Rotation: the current admin sends it, naming the successor;
+// it takes effect at once.
 message SetAdmin {
     voucherCell: Cell;               // serialised AdminInitVoucher
     signature: Slice as remaining;   // 512-bit ed25519 signature, see SignedVoucher

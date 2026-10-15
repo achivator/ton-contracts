@@ -3,14 +3,16 @@ import "@stdlib/ownable";
 import "./distributor_messages.tact";
 import "./chat_pool.tact";
 
-const PoolDeployValue: Int = ton("0.1");
+// Stays on a new pool as its storage reserve (PoolMinTonReserve).
+const PoolDeployValue: Int = ton("0.15");
 // Master's own gas + forward fee for a CreatePool, paid by the caller.
 const CreatePoolGas: Int = ton("0.05");
 // TON the master keeps for its own storage rent: Deploy refunds only what
 // exceeds it (top-ups are welcome too). The master's state holds the pool
-// code; tests/DistributorMasterSecurity.spec.ts measures the rent and checks
-// that this covers it for at least 10 years at mainnet prices.
-const MasterStorageReserve: Int = ton("0.1");
+// code; tests/DistributorMasterSecurity.spec.ts measures the rent (about
+// 0.012 TON a year at mainnet prices) and checks that this covers it for at
+// least 15 years.
+const MasterStorageReserve: Int = ton("0.2");
 
 // The master takes no fee and has no way to pay TON out: its balance only
 // pays its own storage rent. The ChatPool code it deploys is compiled in
@@ -57,7 +59,7 @@ contract DistributorMaster with Ownable {
     // address, and RotateBackendKey never moves it.
     receive(msg: CreatePool) {
         let ctx: Context = context();
-        require(ctx.value >= PoolDeployValue + CreatePoolGas, "attach at least 0.15 TON");
+        require(ctx.value >= PoolDeployValue + CreatePoolGas, "attach at least 0.2 TON");
         // Reserve first: the pool's value and the refund come out of the
         // incoming message, never out of the master's own balance.
         nativeReserve(myBalance() - ctx.value, PoolReserveAtMost);

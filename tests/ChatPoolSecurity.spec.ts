@@ -652,15 +652,15 @@ describe('ChatPool security regressions', () => {
             expect(years).toBeGreaterThanOrEqual(10);
         });
 
-        it('keeps a TON reserve that pays the pool state for at least 10 years', async () => {
+        it('keeps a TON reserve that pays the pool state for at least 14 years', async () => {
             await funded(toNano('1000'));
             const perYear = await rentPerYear(env.bc, env.pool.address);
-            const reserve = toNano('0.1'); // PoolMinTonReserve
+            const reserve = toNano('0.15'); // PoolMinTonReserve
             const years = Number(reserve) / Number(perYear);
             console.log(
                 `pool rent ${(Number(perYear) / 1e9).toFixed(5)} TON/yr; the reserve covers ${years.toFixed(1)} years`,
             );
-            expect(years).toBeGreaterThanOrEqual(10);
+            expect(years).toBeGreaterThanOrEqual(14);
         });
     });
 
@@ -806,13 +806,13 @@ describe('ChatPool security regressions', () => {
         );
         expectTx(ok, { from: env.pool.address, to: dest.address, success: true });
         expect((await tonBalance(env.bc, dest.address)) - before).toBeGreaterThanOrEqual(toNano('0.9'));
-        expect(await tonBalance(env.bc, env.pool.address)).toBeGreaterThanOrEqual(toNano('0.1'));
+        expect(await tonBalance(env.bc, env.pool.address)).toBeGreaterThanOrEqual(toNano('0.15'));
 
         const left = await tonBalance(env.bc, env.pool.address);
         const tooMuch = await env.pool.send(
             env.admin.getSender(),
             { value: toNano('0.05') },
-            { $$type: 'WithdrawTon', to: dest.address, amount: left - toNano('0.1') + toNano('0.001') },
+            { $$type: 'WithdrawTon', to: dest.address, amount: left - toNano('0.15') + toNano('0.001') },
         );
         expectTx(tooMuch, { to: env.pool.address, success: false, exitCode: code('would go below the TON reserve') });
     });

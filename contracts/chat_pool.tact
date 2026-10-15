@@ -22,8 +22,10 @@ const PoolMinRefundValue: Int = ton("0.08");
 // master and back. What is left returns to the admin.
 const PoolRegisterJettonValue: Int = ton("0.05");
 // WithdrawTon never takes the pool below this: its storage rent for at
-// least 10 years (tests/ChatPoolSecurity.spec.ts measures it).
-const PoolMinTonReserve: Int = ton("0.1");
+// least 14 years (about 0.01 TON a year at mainnet prices, measured in
+// tests/ChatPoolSecurity.spec.ts). The master deploys a pool with exactly
+// this much (PoolDeployValue); top-ups and claim fees add to it.
+const PoolMinTonReserve: Int = ton("0.15");
 // Kept from every claim for the pool's storage rent. A claim's nonce entry
 // (2 cells, about 0.00013 TON a year at mainnet prices) lives NonceRetention
 // (a week) while the pool is in use, then later claims prune it: the fee
@@ -59,6 +61,10 @@ const PoolDepositGas: Int = ton("0.02");
 // raw_reserve mode: reserve at most the amount (never fail on a low balance)
 const PoolReserveAtMost: Int = 2;
 
+// Admin recovery (ProposeAdmin) takes effect this long after the proposal,
+// unless the current admin cancels it first.
+const AdminRecoveryDelay: Int = 604800;
+
 // queryId of outbound JettonTransfers tells the bounce handler what to undo.
 // Claims use the voucher nonce, which is therefore limited to (0, 2^63).
 const QueryClaimNonceLimit: Int = 0x8000000000000000;
@@ -82,6 +88,11 @@ contract ChatPool {
     backendPubKey: Int as uint256 = 0;
 
     admin: Address?;                       // set via backend-signed SetAdmin (init/rotation)
+    // Backend-initiated recovery (CP-12): proposed admin, when, and the
+    // sequence number its voucher had to carry.
+    pendingAdmin: Address?;
+    pendingAdminSince: Int as uint32 = 0;
+    adminProposalSeq: Int as uint32 = 0;
     balances: map<Address, Int>;           // jettonMaster -> credited amount (ledger)
     // Registered by RegisterJetton from the jetton master's own TEP-89 answer;
     // never re-pointed, and injective: one wallet, one master (CP-1, CP-2).
@@ -272,6 +283,53 @@ contract ChatPool {
             require(sender() == cur!!, "only the current admin may rotate");
         }
         self.admin = vAdmin;
+        self.refundExcess(context(), sender(), 0);
+    }
+
+    // ---- Admin recovery: a lost or stale admin wallet (CP-12) ----
+    // The backend signs a proposal for the wallet of a current chat
+    // administrator; that wallet submits it and the 7-day timelock starts.
+    // The current admin can cancel it meanwhile, so a leaked backend key
+    // alone cannot take a pool whose admin is watching. Rotation by the
+    // current admin (SetAdmin) stays immediate and leaves a pending proposal
+    // alone: the new admin can cancel it like any other.
+    receive(msg: ProposeAdmin) {
+        self.requireInitialized();
+        require(checkSignature(signedVoucherHash(VoucherTagAdminProposal, myAddress(), msg.voucherCell), msg.signature, self.backendPubKey),
+            "bad admin proposal signature");
+
+        let vs: Slice = msg.voucherCell.beginParse();
+        let vChatId: Int = vs.loadInt(64);
+        let vNewAdmin: Address = vs.loadAddress();
+        let vSeq: Int = vs.loadUint(32);
+        let vExpiry: Int = vs.loadUint(64);
+        vs.endParse();
+
+        require(vChatId == self.chatId, "voucher for another chat");
+        require(now() < vExpiry, "voucher expired");
+        require(self.admin != null, "pool has no admin yet");
+        require(vSeq == self.adminProposalSeq, "stale admin proposal");
+        require(self.pendingAdmin == null, "an admin proposal is already pending");
+        require(sender() == vNewAdmin, "only the proposed admin may submit");
+        self.pendingAdmin = vNewAdmin;
+        self.pendingAdminSince = now();
+        self.refundExcess(context(), sender(), 0);
+    }
+
+    receive(msg: CancelAdminProposal) {
+        self.requireAdmin();
+        require(self.pendingAdmin != null, "no admin proposal");
+        self.clearAdminProposal();
+        self.returnValue();
+    }
+
+    receive(msg: ExecuteAdminProposal) {
+        self.requireInitialized();
+        let next: Address? = self.pendingAdmin;
+        require(next != null, "no admin proposal");
+        require(now() >= self.pendingAdminSince + AdminRecoveryDelay, "admin proposal is still timelocked");
+        self.admin = next!!;
+        self.clearAdminProposal();
         self.refundExcess(context(), sender(), 0);
     }
 
@@ -478,6 +536,13 @@ contract ChatPool {
         });
     }
 
+    // Ends the pending proposal; its voucher's seq is spent with it.
+    fun clearAdminProposal() {
+        self.pendingAdmin = null;
+        self.pendingAdminSince = 0;
+        self.adminProposalSeq = self.adminProposalSeq + 1;
+    }
+
     fun requireInitialized() {
         require(self.initialized, "pool is not initialised");
     }
@@ -592,6 +657,23 @@ contract ChatPool {
 
     get fun poolAdmin(): Address? {
         return self.admin;
+    }
+
+    get fun pendingAdmin(): Address? {
+        return self.pendingAdmin;
+    }
+
+    // When ExecuteAdminProposal becomes possible, 0 without a proposal.
+    get fun pendingAdminExecutableAt(): Int {
+        if (self.pendingAdmin == null) {
+            return 0;
+        }
+        return self.pendingAdminSince + AdminRecoveryDelay;
+    }
+
+    // The seq the next AdminProposalVoucher must carry.
+    get fun adminProposalSeq(): Int {
+        return self.adminProposalSeq;
     }
 
     // Monotonic: once true, a nonce stays used (bounced and retired ones too).

@@ -14,6 +14,9 @@ import { confirmSend, lastTxLt } from './actors';
 //                                       (TEP-89; before its first deposit)
 //   MODE=sweep  JETTON_MASTER, AMOUNT, [TO]  move untracked jettons out
 //   MODE=ton    AMOUNT, [TO]            move the pool's TON above its reserve
+//   MODE=cancel-proposal                cancel a pending admin recovery
+//   MODE=execute-proposal               execute an admin recovery whose 7-day
+//                                       timelock is over (any wallet may)
 //
 // Pool admin safety controls. The connected wallet must be the pool admin.
 // They bound what a leaked backend key can do; see contracts/chat_pool.tact.
@@ -88,8 +91,16 @@ export async function run(provider: NetworkProvider) {
                 },
             );
             break;
+        case 'cancel-proposal':
+            await pool.send(provider.sender(), { value }, { $$type: 'CancelAdminProposal' });
+            break;
+        case 'execute-proposal':
+            await pool.send(provider.sender(), { value }, { $$type: 'ExecuteAdminProposal' });
+            break;
         default:
-            throw new Error(`Unknown MODE "${mode}" (pause | resume | limit | key | register | sweep | ton)`);
+            throw new Error(
+                `Unknown MODE "${mode}" (pause | resume | limit | key | register | sweep | ton | cancel-proposal | execute-proposal)`,
+            );
     }
     console.log(`poolControl ${mode} sent to ${pool.address.toString()}`);
     await confirmSend(provider, sender, prevLt, `poolControl ${mode}`);
