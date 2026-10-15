@@ -1,8 +1,15 @@
 import "./distributor_messages.tact";
+import "./dict.fc";
+
+@name(__achivator_udict_min_key)
+native udictMinKey(dict: Cell?, keyLen: Int): Int;
 
 // Minimum TON the caller must attach so the outbound jetton transfer cannot
-// run out of gas in the jetton wallet (which would bounce the transfer).
-const PoolMinClaimValue: Int = ton("0.05");
+// run out of gas in the jetton wallet (which would bounce the transfer). At
+// this value the pool forwards about 0.07 TON, at least 0.02 TON more than
+// the reference and USDT wallets need to deliver to a fresh wallet
+// (tests/RealJettonWallets.spec.ts measures both).
+const PoolMinClaimValue: Int = ton("0.08");
 const PoolMinWithdrawValue: Int = ton("0.08");
 // A rejected deposit is refunded only when its notification brought at least
 // this much TON, enough for the refund to reach the depositor through a
@@ -17,13 +24,35 @@ const PoolRegisterJettonValue: Int = ton("0.05");
 // WithdrawTon never takes the pool below this: its storage rent for at
 // least 10 years (tests/ChatPoolSecurity.spec.ts measures it).
 const PoolMinTonReserve: Int = ton("0.1");
-// Kept from every claim: pays the storage rent of the claim's nonce entry
-// (~0.0003 TON/year each), so a busy pool never rents itself into freezing.
+// Kept from every claim for the pool's storage rent. A claim's nonce entry
+// (2 cells, about 0.00013 TON a year at mainnet prices) lives NonceRetention
+// (a week) while the pool is in use, then later claims prune it: the fee
+// covers that thousands of times over and the rest tops up the pool's rent
+// reserve. If the pool falls idle its last entries stay, and their own fees
+// pay for them for about 15 years (tests/ChatPoolSecurity.spec.ts, CP-7).
 const PoolClaimStorageFee: Int = ton("0.002");
-// Default daily claim budget per jetton, as a share of the balance at the
-// first claim of the day. Caps what a leaked backend key can drain per day.
+// Default claim budget per jetton over a rolling 24h window, as a share of
+// the balance plus what the window has already paid out. Caps what a leaked
+// backend key can drain: about one budget in any short burst, never more
+// than two in any 24 hours (see windowSpent).
 const DefaultDailyClaimPercent: Int = 10;
-const ClaimDay: Int = 86400;
+const ClaimWindow: Int = 86400;
+// Claim vouchers may expire at most this far ahead, which bounds how long a
+// nonce entry must be kept (X-3).
+const MaxClaimTtl: Int = 86400;
+// A used nonce is kept this long after its claim, then pruned, and the nonce
+// floor moves above it. MaxClaimTtl plus six days: every voucher with a
+// lower nonce (the backend allocates them in order) has expired long before,
+// and the backend has had six days to reconcile it against nonceState().
+// It also bounds the state: at 2 cells an entry, a pool stays clear of
+// max_acc_state_cells (65536) below about 4,500 claims a day, sustained.
+const NonceRetention: Int = 604800;
+// Entries pruned per claim at most: bounded gas, and still twice the rate
+// entries are added at, so the backlog always drains.
+const NoncePrunePerClaim: Int = 2;
+// A claim nonce must lie below nonceFloor + NonceWindow: a leaked key cannot
+// push the floor to the end of the range and retire every nonce at once.
+const NonceWindow: Int = 0x100000000;
 // Gas of the deposit notification. Must be covered by the depositor's
 // forward_ton_amount, never by the pool; whatever is left goes back.
 const PoolDepositGas: Int = ton("0.02");
@@ -60,14 +89,18 @@ contract ChatPool {
     walletMasters: map<Address, Address>;  // reverse of jettonWallets: deposits, bounces
     pendingWallets: map<Address, Int>;     // jettonMaster -> queryId of the open TEP-89 request
     lastQueryId: Int as uint64 = 0;
-    usedNonces: map<Int, Bool>;            // claim replay protection
+    // Claim replay protection: nonce -> claimedAt * 2 + bounced. Entries are
+    // pruned NonceRetention after the claim (oldest nonce first); every nonce
+    // below nonceFloor is retired for good (X-3, CP-10).
+    nonces: map<Int as uint64, Int as uint64>;
+    nonceFloor: Int as uint64 = 0;
 
     // Safety controls (admin-only), see SetClaimsPaused / SetClaimLimit.
     claimsPaused: Bool = false;
-    claimLimits: map<Address, Int>;        // jettonMaster -> explicit daily budget
-    claimDay: Int as uint32 = 0;           // UTC day the two maps below belong to
-    dayBudgets: map<Address, Int>;         // budget fixed at the day's first claim
-    daySpent: map<Address, Int>;           // claimed so far that day
+    claimLimits: map<Address, Int>;        // jettonMaster -> explicit 24h budget
+    // jettonMaster -> spent << 32 | updatedAt: what the rolling window still
+    // counts, as of updatedAt (it decays linearly, see windowSpent)
+    claimWindows: map<Address, Int>;
 
     init(master: Address, chatId: Int) {
         self.master = master;
@@ -242,7 +275,7 @@ contract ChatPool {
         self.refundExcess(context(), sender(), 0);
     }
 
-    // ---- Claim: backend-signed voucher, recipient pays the gas ----
+    // ---- Claim: backend-signed voucher, the submitter pays the gas ----
     receive(msg: Claim) {
         self.requireInitialized();
         require(checkSignature(signedVoucherHash(VoucherTagClaim, myAddress(), msg.voucherCell), msg.signature, self.backendPubKey),
@@ -259,9 +292,12 @@ contract ChatPool {
 
         require(vChatId == self.chatId, "voucher for another chat");
         require(now() < vExpiry, "voucher expired");
+        require(vExpiry <= now() + MaxClaimTtl, "voucher expiry too far ahead");
         require(vNonce > 0 && vNonce < QueryClaimNonceLimit, "nonce out of range");
+        require(vNonce >= self.nonceFloor, "nonce retired");
+        require(vNonce < self.nonceFloor + NonceWindow, "nonce too far ahead");
         require(vAmount > 0, "zero claim");
-        require(self.usedNonces.get(vNonce) == null, "voucher already used");
+        require(self.nonces.get(vNonce) == null, "voucher already used");
         require(!self.claimsPaused, "claims are paused by the chat admin");
         let ctx: Context = context();
         require(ctx.value >= PoolMinClaimValue + PoolClaimStorageFee, "attach more TON for gas");
@@ -271,19 +307,18 @@ contract ChatPool {
         let wallet: Address? = self.jettonWallets.get(vJettonMaster);
         require(wallet != null, "jetton not registered");
 
-        self.rollClaimDay();
-        let budget: Int = self.dayBudgetFor(vJettonMaster, bal);
-        self.dayBudgets.set(vJettonMaster, budget);
-        let spent: Int = self.mapOrZero(self.daySpent, vJettonMaster);
-        require(spent + vAmount <= budget, "daily claim limit reached");
-        self.daySpent.set(vJettonMaster, spent + vAmount);
+        let spent: Int = self.windowSpent(vJettonMaster);
+        require(spent + vAmount <= self.claimBudget(vJettonMaster, bal, spent), "daily claim limit reached");
+        self.setWindowSpent(vJettonMaster, spent + vAmount);
 
         self.balances.set(vJettonMaster, bal - vAmount);
-        self.usedNonces.set(vNonce, true);
+        self.nonces.set(vNonce, now() * 2);
+        self.pruneNonces();
 
-        // Keep the storage rent, forward the rest of the claimer's TON.
+        // Keep the storage fee, forward the rest of the submitter's TON; the
+        // jetton wallet's excess goes back to the submitter too (CP-14).
         nativeReserve(myBalance() - ctx.value + PoolClaimStorageFee, 0);
-        self.sendJettons(wallet!!, vNonce, vAmount, vRecipient, vRecipient, SendRemainingBalance);
+        self.sendJettons(wallet!!, vNonce, vAmount, vRecipient, ctx.sender, SendRemainingBalance);
     }
 
     // ---- Safety controls: admin only ----
@@ -300,8 +335,7 @@ contract ChatPool {
         } else {
             self.claimLimits.set(msg.jettonMaster, msg.dailyLimit);
         }
-        // takes effect now: today's budget is recomputed on the next claim
-        self.dayBudgets.set(msg.jettonMaster, null);
+        // takes effect at once: every claim computes its budget afresh
         self.returnValue();
     }
 
@@ -363,13 +397,21 @@ contract ChatPool {
         }
         let q: Int = msg.queryId;
         if (q > 0 && q < QueryClaimNonceLimit) {
-            self.usedNonces.set(q, null);
-            if (self.claimDay == now() / ClaimDay) {
-                let spent: Int = self.mapOrZero(self.daySpent, jettonMaster!!) - msg.amount;
-                if (spent < 0) {
-                    spent = 0;
-                }
-                self.daySpent.set(jettonMaster!!, spent);
+            // A wallet bounces a transfer once; an entry that is gone or
+            // already marked bounced means there is nothing left to undo.
+            let entry: Int? = self.nonces.get(q);
+            if (entry == null || entry!! % 2 == 1) {
+                return;
+            }
+            // The nonce stays burnt, marked bounced: the backend reissues the
+            // claim under a new nonce, never this one (CP-10).
+            self.nonces.set(q, entry!! + 1);
+            // Give back only the part of the charge the window still counts:
+            // a claim from more than 24h ago no longer weighs on it (CP-4).
+            let elapsed: Int = now() - entry!! / 2;
+            if (elapsed < ClaimWindow) {
+                let charge: Int = msg.amount * (ClaimWindow - elapsed) / ClaimWindow;
+                self.setWindowSpent(jettonMaster!!, max(self.windowSpent(jettonMaster!!) - charge, 0));
             }
         } else if (q != QueryWithdrawTracked) {
             // Sweeps and refunds were never in the ledger; crediting them
@@ -457,29 +499,61 @@ contract ChatPool {
         });
     }
 
-    fun rollClaimDay() {
-        let day: Int = now() / ClaimDay;
-        if (day != self.claimDay) {
-            self.claimDay = day;
-            self.dayBudgets = emptyMap();
-            self.daySpent = emptyMap();
+    // What the rolling window still counts for a jetton: each charge decays
+    // linearly to zero over ClaimWindow (rounded up). The drain rate is at
+    // most budget / 24h, so any stretch of T seconds pays out at most
+    // budget * (1 + T / 24h): one budget in a burst, two over 24 hours, and
+    // no fresh budget at any calendar boundary (CP-3).
+    fun windowSpent(jettonMaster: Address): Int {
+        let w: Int? = self.claimWindows.get(jettonMaster);
+        if (w == null) {
+            return 0;
+        }
+        let spent: Int = w!! >> 32;
+        let elapsed: Int = max(now() - (w!! & 0xFFFFFFFF), 0);
+        if (elapsed >= ClaimWindow) {
+            return 0;
+        }
+        return (spent * (ClaimWindow - elapsed) + ClaimWindow - 1) / ClaimWindow;
+    }
+
+    fun setWindowSpent(jettonMaster: Address, spent: Int) {
+        if (spent == 0) {
+            self.claimWindows.set(jettonMaster, null);
+        } else {
+            self.claimWindows.set(jettonMaster, (spent << 32) | now());
         }
     }
 
-    // Today's budget: fixed at the day's first claim from the explicit limit
-    // or the default share of the balance at that moment.
-    fun dayBudgetFor(jettonMaster: Address, balance: Int): Int {
-        if (self.claimDay == now() / ClaimDay) {
-            let fixed: Int? = self.dayBudgets.get(jettonMaster);
-            if (fixed != null) {
-                return fixed!!;
-            }
-        }
+    // The window's budget: the admin's explicit limit, else the default share
+    // of the balance plus what the window still counts. Computed afresh on
+    // every claim, so a tiny first claim cannot pin it and a deposit raises
+    // it at once (CP-6).
+    fun claimBudget(jettonMaster: Address, balance: Int, spent: Int): Int {
         let explicit: Int? = self.claimLimits.get(jettonMaster);
         if (explicit != null) {
             return explicit!!;
         }
-        return balance * DefaultDailyClaimPercent / 100;
+        return (balance + spent) * DefaultDailyClaimPercent / 100;
+    }
+
+    // Retires up to NoncePrunePerClaim of the oldest nonce entries whose
+    // retention is over, moving the floor above them.
+    fun pruneNonces() {
+        let i: Int = 0;
+        while (i < NoncePrunePerClaim) {
+            let key: Int = udictMinKey(self.nonces.asCell(), 64);
+            if (key < 0) {
+                return;
+            }
+            let entry: Int = self.nonces.get(key)!!;
+            if (now() < entry / 2 + NonceRetention) {
+                return;
+            }
+            self.nonces.set(key, null);
+            self.nonceFloor = max(self.nonceFloor, key + 1);
+            i = i + 1;
+        }
     }
 
     fun mapOrZero(m: map<Address, Int>, key: Address): Int {
@@ -520,8 +594,31 @@ contract ChatPool {
         return self.admin;
     }
 
+    // Monotonic: once true, a nonce stays used (bounced and retired ones too).
     get fun isNonceUsed(nonce: Int): Bool {
-        return self.usedNonces.get(nonce) != null;
+        return self.nonceState(nonce) != 0;
+    }
+
+    // 0 unused (a valid voucher can still claim it), 1 used, 2 used and its
+    // transfer bounced (the jettons stayed: reissue under a new nonce),
+    // 3 retired: below the floor, its record pruned; it can never be claimed,
+    // and whether it ever was is no longer known on-chain. The backend
+    // reconciles long before a nonce gets retired (NonceRetention).
+    get fun nonceState(nonce: Int): Int {
+        if (nonce >= 0 && nonce < QueryClaimNonceLimit) {
+            let entry: Int? = self.nonces.get(nonce);
+            if (entry != null) {
+                return 1 + entry!! % 2;
+            }
+        }
+        if (nonce < self.nonceFloor) {
+            return 3;
+        }
+        return 0;
+    }
+
+    get fun nonceFloor(): Int {
+        return self.nonceFloor;
     }
 
     get fun poolChatId(): Int {
@@ -532,20 +629,23 @@ contract ChatPool {
         return self.claimsPaused;
     }
 
-    // Explicit daily limit, 0 when the default share applies.
+    // Explicit 24h limit, 0 when the default share applies.
     get fun claimLimit(jettonMaster: Address): Int {
         return self.mapOrZero(self.claimLimits, jettonMaster);
     }
 
-    // What claims can still move today (UTC day), for the backend to size
-    // vouchers so they never fail on-chain.
+    // What the rolling 24h window still counts against the budget.
+    get fun claimWindowSpent(jettonMaster: Address): Int {
+        return self.windowSpent(jettonMaster);
+    }
+
+    // What claims can move right now under the rolling 24h budget (the name
+    // predates the window), for the backend to size vouchers so they never
+    // fail on-chain.
     get fun claimableToday(jettonMaster: Address): Int {
         let bal: Int = self.balanceOrZero(jettonMaster);
-        let spent: Int = 0;
-        if (self.claimDay == now() / ClaimDay) {
-            spent = self.mapOrZero(self.daySpent, jettonMaster);
-        }
-        let left: Int = self.dayBudgetFor(jettonMaster, bal) - spent;
+        let spent: Int = self.windowSpent(jettonMaster);
+        let left: Int = self.claimBudget(jettonMaster, bal, spent) - spent;
         if (left > bal) {
             left = bal;
         }

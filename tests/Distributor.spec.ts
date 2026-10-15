@@ -818,7 +818,7 @@ describe('Token Distribution', () => {
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
     });
 
-    it('restores the ledger and releases the nonce when a claim transfer bounces', async () => {
+    it('restores the ledger and keeps the nonce burnt (marked bounced) when a claim transfer bounces', async () => {
         await deposit(toNano('1000'));
         const body = claimVoucher({ amount: toNano('40'), nonce: 7n });
         await pool.send(user.getSender(), { value: toNano('0.1') }, body);
@@ -854,7 +854,9 @@ describe('Token Distribution', () => {
             }),
         );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
-        expect(await pool.getIsNonceUsed(7n)).toBe(false);
+        // never reusable: the backend reissues under a new nonce
+        expect(await pool.getIsNonceUsed(7n)).toBe(true);
+        expect(await pool.getNonceState(7n)).toEqual(2n);
 
         // a bounce-shaped message from an unregistered contract changes nothing
         await blockchain.sendMessage(
@@ -925,7 +927,7 @@ describe('Token Distribution', () => {
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
     });
 
-    it('caps claims at 10% of the balance per day by default', async () => {
+    it('caps claims at 10% of the balance per rolling 24h by default', async () => {
         await deposit(toNano('1000'));
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('100'));
 
@@ -946,7 +948,7 @@ describe('Token Distribution', () => {
         expect(over.transactions).toHaveTransaction({ from: user.address, to: pool.address, success: false });
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('940'));
 
-        // next UTC day the budget renews (10% of the new balance)
+        // 24h later the window has let go of the claim (10% of the new balance)
         blockchain.now = Math.floor(Date.now() / 1000) + 86400;
         expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('94'));
         const tomorrow = await pool.send(
@@ -1003,7 +1005,8 @@ describe('Token Distribution', () => {
             { $$type: 'SetClaimLimit', jettonMaster, dailyLimit: 0n },
         );
         expect(await pool.getClaimLimit(jettonMaster)).toEqual(0n);
-        expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('1'));
+        // 10% of (balance + what the rolling window counts) - that count
+        expect(await pool.getClaimableToday(jettonMaster)).toEqual(toNano('10'));
     });
 
     it('lets the admin pause claims and move the pool to a new backend key', async () => {
