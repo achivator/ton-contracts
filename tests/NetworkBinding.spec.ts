@@ -10,7 +10,15 @@ import { Address, beginCell, Cell, ContractABI, toNano } from '@ton/core';
 import { keyPairFromSeed, KeyPair, sign } from '@ton/crypto';
 import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher } from '../wrappers/ChatPool';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
-import { AchievementRegistry, storeMintVoucher, storeRegisterVoucher } from '../wrappers/AchievementRegistry';
+import { AchievementRegistry } from '../wrappers/AchievementRegistry';
+import {
+    mintAchievementBody,
+    mintVoucherCell,
+    PLATFORM_CHAT_TAG,
+    registerTemplateBody,
+    registerVoucherCell,
+    templateKeyOf,
+} from '../wrappers/Achievements';
 import '@ton/test-utils';
 import { NetworkProvider } from '@ton/blueprint';
 import { networkGlobalId, refuseKeySharedWithOtherNetwork, voucherSignerFor } from '../scripts/network';
@@ -289,57 +297,45 @@ describe('vouchers are bound to the network (X-2)', () => {
             return { bc, registry, admin, member };
         }
 
+        const TEMPLATE_KEY = templateKeyOf(PLATFORM_CHAT_TAG, 1n);
+        const USER_TAG = 555n;
+
         function register(net: Net, globalId: number, target = net.registry.address) {
-            const voucherCell = beginCell()
-                .store(
-                    storeRegisterVoucher({
-                        $$type: 'RegisterVoucher',
-                        chatId: CHAT_ID,
-                        registrant: net.admin.address,
-                        expiry: farFuture(),
-                    }),
-                )
-                .endCell();
+            const voucherCell = registerVoucherCell({
+                chatTag: PLATFORM_CHAT_TAG,
+                registrant: net.admin.address,
+                contentHash: 1n,
+                expiry: farFuture(),
+                contentUrl: 'https://achivator.cc/metadata/first-steps.json',
+            });
             const sig = signForNetwork(voucherCell, backend, TAG.Register, target, globalId);
-            return net.registry.send(
-                net.admin.getSender(),
-                { value: toNano('0.2') },
-                {
-                    $$type: 'RegisterTemplate',
-                    contentUrl: 'https://achivator.cc/metadata/first-steps.json',
-                    contentHash: 1n,
-                    royalty: {
-                        $$type: 'RoyaltyParams',
-                        numerator: 5n,
-                        denominator: 100n,
-                        destination: net.admin.address,
-                    },
-                    voucherCell,
-                    signature: signatureCell(sig),
-                },
-            );
+            return net.admin.send({
+                to: net.registry.address,
+                value: toNano('0.2'),
+                body: registerTemplateBody(voucherCell, sig),
+            });
         }
 
-        function mint(net: Net, globalId: number, nonce: bigint) {
-            const voucherCell = beginCell()
-                .store(
-                    storeMintVoucher({
-                        $$type: 'MintVoucher',
-                        templateId: 0n,
-                        recipient: net.member.address,
-                        tgUserId: 555n,
-                        nonce,
-                        expiry: farFuture(),
-                    }),
-                )
-                .endCell();
+        function mint(net: Net, globalId: number) {
+            const voucherCell = mintVoucherCell({
+                templateKey: TEMPLATE_KEY,
+                recipient: net.member.address,
+                userTag: USER_TAG,
+                expiry: farFuture(),
+            });
             const sig = signForNetwork(voucherCell, backend, TAG.Mint, net.registry.address, globalId);
-            return net.registry.send(
-                net.member.getSender(),
-                { value: toNano('0.2') },
-                { $$type: 'MintAchievement', voucherCell, signature: signatureCell(sig) },
-            );
+            return net.member.send({
+                to: net.registry.address,
+                value: toNano('0.2'),
+                body: mintAchievementBody(voucherCell, sig),
+            });
         }
+
+        async function isActive(net: Net, address: Address) {
+            return (await net.bc.getContract(address)).accountState?.type === 'active';
+        }
+        const isRegistered = async (net: Net) => isActive(net, await net.registry.getTemplateAddress(TEMPLATE_KEY));
+        const isMinted = async (net: Net) => isActive(net, await net.registry.getItemAddress(TEMPLATE_KEY, USER_TAG));
 
         it('register and mint vouchers signed for testnet are rejected on mainnet', async () => {
             const testnet = await network(TESTNET);
@@ -352,35 +348,34 @@ describe('vouchers are bound to the network (X-2)', () => {
                 success: false,
                 exitCode: errorCode(mainnet.registry, 'bad register voucher signature'),
             });
-            expect(await mainnet.registry.getTemplatesCount()).toEqual(0n);
+            expect(await isRegistered(mainnet)).toBe(false);
 
             const ownRegister = await register(mainnet, MAINNET);
             expect(ownRegister.transactions).toHaveTransaction({ to: mainnet.registry.address, success: true });
-            expect(await mainnet.registry.getTemplatesCount()).toEqual(1n);
+            expect(await isRegistered(mainnet)).toBe(true);
 
-            const replayedMint = await mint(mainnet, TESTNET, 1n);
+            const replayedMint = await mint(mainnet, TESTNET);
             expect(replayedMint.transactions).toHaveTransaction({
                 to: mainnet.registry.address,
                 success: false,
                 exitCode: errorCode(mainnet.registry, 'bad mint voucher signature'),
             });
-            expect(await mainnet.registry.getIsMinted(0n, 555n)).toBe(false);
-            expect(await mainnet.registry.getIsNonceUsed(1n)).toBe(false);
+            expect(await isMinted(mainnet)).toBe(false);
 
-            const ownMint = await mint(mainnet, MAINNET, 1n);
+            const ownMint = await mint(mainnet, MAINNET);
             expect(ownMint.transactions).toHaveTransaction({ to: mainnet.registry.address, success: true });
-            expect(await mainnet.registry.getIsMinted(0n, 555n)).toBe(true);
+            expect(await isMinted(mainnet)).toBe(true);
 
             // and testnet takes its own vouchers
             expect((await register(testnet, TESTNET)).transactions).toHaveTransaction({
                 to: testnet.registry.address,
                 success: true,
             });
-            expect((await mint(testnet, TESTNET, 1n)).transactions).toHaveTransaction({
+            expect((await mint(testnet, TESTNET)).transactions).toHaveTransaction({
                 to: testnet.registry.address,
                 success: true,
             });
-            expect(await testnet.registry.getIsMinted(0n, 555n)).toBe(true);
+            expect(await isMinted(testnet)).toBe(true);
         });
     });
 
