@@ -6,9 +6,9 @@ native udictMinKey(dict: Cell?, keyLen: Int): Int;
 
 // Minimum TON the caller must attach so the outbound jetton transfer cannot
 // run out of gas in the jetton wallet (which would bounce the transfer). At
-// this value the pool forwards about 0.07 TON, at least 0.02 TON more than
-// the reference and USDT wallets need to deliver to a fresh wallet
-// (tests/RealJettonWallets.spec.ts measures both).
+// this value the pool forwards about 0.077 TON, 0.037 more than the
+// reference wallet needs to deliver to a fresh wallet (USDT needs less);
+// tests/RealJettonWallets.spec.ts measures both and wants 0.02 of margin.
 const PoolMinClaimValue: Int = ton("0.08");
 const PoolMinWithdrawValue: Int = ton("0.08");
 // A rejected deposit is refunded only when its notification brought at least
@@ -401,6 +401,7 @@ contract ChatPool {
     // signed by the old key stop working immediately.
     receive(msg: SetPoolBackendKey) {
         self.requireAdmin();
+        require(msg.backendPubKey != 0, "invalid backend key");
         self.backendPubKey = msg.backendPubKey;
         self.returnValue();
     }

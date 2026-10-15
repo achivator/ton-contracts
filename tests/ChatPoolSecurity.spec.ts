@@ -817,6 +817,16 @@ describe('ChatPool security regressions', () => {
         expectTx(tooMuch, { to: env.pool.address, success: false, exitCode: code('would go below the TON reserve') });
     });
 
+    it('refuses a zero backend key from the admin as well', async () => {
+        const res = await env.pool.send(
+            env.admin.getSender(),
+            { value: toNano('0.05') },
+            { $$type: 'SetPoolBackendKey', backendPubKey: 0n },
+        );
+        expectTx(res, { to: env.pool.address, success: false, exitCode: code('invalid backend key') });
+        expect(await env.pool.getBackendKey()).toEqual(BigInt('0x' + BACKEND.publicKey.toString('hex')));
+    });
+
     // ---- CP-14: who gets the claim's excess ----
 
     it('CP-14: sends the claim excess to the submitter, not the recipient', async () => {
