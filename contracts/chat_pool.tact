@@ -3,7 +3,20 @@ import "./distributor_messages.tact";
 // Minimum TON the caller must attach so the outbound jetton transfer cannot
 // run out of gas in the jetton wallet (which would bounce the transfer).
 const PoolMinClaimValue: Int = ton("0.05");
-const PoolMinWithdrawValue: Int = ton("0.05");
+const PoolMinWithdrawValue: Int = ton("0.08");
+// A rejected deposit is refunded only when its notification brought at least
+// this much TON, enough for the refund to reach the depositor through a
+// real jetton wallet. With less, the refund would bounce and strand the
+// jettons on the pool's wallet anyway: the pool keeps them as untracked
+// instead, and the admin can move them with SweepUntracked (registering the
+// jetton first, if needed).
+const PoolMinRefundValue: Int = ton("0.08");
+// TON attached to RegisterJetton: the TEP-89 round trip to the jetton
+// master and back. What is left returns to the admin.
+const PoolRegisterJettonValue: Int = ton("0.05");
+// WithdrawTon never takes the pool below this: its storage rent for at
+// least 10 years (tests/ChatPoolSecurity.spec.ts measures it).
+const PoolMinTonReserve: Int = ton("0.1");
 // Kept from every claim: pays the storage rent of the claim's nonce entry
 // (~0.0003 TON/year each), so a busy pool never rents itself into freezing.
 const PoolClaimStorageFee: Int = ton("0.002");
@@ -20,8 +33,8 @@ const PoolReserveAtMost: Int = 2;
 // queryId of outbound JettonTransfers tells the bounce handler what to undo.
 // Claims use the voucher nonce, which is therefore limited to (0, 2^63).
 const QueryClaimNonceLimit: Int = 0x8000000000000000;
-const QueryWithdrawTracked: Int = 0x8000000000000001;   // fully covered by the ledger
-const QueryWithdrawUntracked: Int = 0x8000000000000002; // exceeded the ledger
+const QueryWithdrawTracked: Int = 0x8000000000000001;   // WithdrawRemainder, debited from the ledger
+const QuerySweepUntracked: Int = 0x8000000000000002;    // SweepUntracked, never in the ledger
 const QueryRefund: Int = 0x8000000000000003;            // returned a rejected deposit
 
 // A pool's address is derived from (master, chatId) alone. The master deploys
@@ -41,8 +54,12 @@ contract ChatPool {
 
     admin: Address?;                       // set via backend-signed SetAdmin (init/rotation)
     balances: map<Address, Int>;           // jettonMaster -> credited amount (ledger)
+    // Registered by RegisterJetton from the jetton master's own TEP-89 answer;
+    // never re-pointed, and injective: one wallet, one master (CP-1, CP-2).
     jettonWallets: map<Address, Address>;  // jettonMaster -> this pool's jetton wallet
-    walletMasters: map<Address, Address>;  // reverse of jettonWallets, for bounces
+    walletMasters: map<Address, Address>;  // reverse of jettonWallets: deposits, bounces
+    pendingWallets: map<Address, Int>;     // jettonMaster -> queryId of the open TEP-89 request
+    lastQueryId: Int as uint64 = 0;
     usedNonces: map<Int, Bool>;            // claim replay protection
 
     // Safety controls (admin-only), see SetClaimsPaused / SetClaimLimit.
@@ -90,25 +107,36 @@ contract ChatPool {
     // (shape 2); cooperating wallets may deliver shape 1. The two are
     // unambiguous: a valid shape 1 always carries 512 bits of signature.
     //
-    // A deposit that fails validation is refunded instead of thrown: a
-    // thrown notification would leave the jettons on the pool's wallet with
-    // no ledger entry and no way back to the depositor. Refunding is safe
-    // even for a forged notification, because the transfer request goes to
-    // the notifying contract itself, which can only move its own jettons.
+    // Credited only when all of these hold (anything else is refunded):
+    //   - the notification comes from a wallet the pool registered (TEP-89),
+    //     so the amount and the original sender are the wallet's word;
+    //   - the original sender is the current admin (CP-9): nobody else's
+    //     jettons can land in a ledger the admin alone can withdraw;
+    //   - a backend voucher for this pool, this chat and that jetton.
+    // A deposit that fails is refunded instead of thrown: a thrown
+    // notification would leave the jettons on the pool's wallet with no
+    // ledger entry. Refunding is safe even for a forged notification: the
+    // transfer request goes to the notifying contract itself, which can only
+    // move its own jettons. Underfunded ones are kept (PoolMinRefundValue).
     receive(msg: JettonTransferNotification) {
         let ctx: Context = context();
+        let jettonMaster: Address? = self.walletMasters.get(ctx.sender);
+        if (jettonMaster == null) {
+            self.refundDeposit(ctx, msg);
+            return;
+        }
         let fp: Slice = msg.forwardPayload;
         if (fp.bits() == 1 && fp.refs() == 1) {
             fp = fp.loadRef().beginParse();
         }
         if (fp.refs() < 1 || fp.bits() < 512) {
-            self.refundDeposit(msg);
+            self.refundDeposit(ctx, msg);
             return;
         }
         let voucherCell: Cell = fp.loadRef();
         let signature: Slice = fp.loadBits(512);
         if (!checkSignature(signedVoucherHash(VoucherTagDeposit, myAddress(), voucherCell), signature, self.backendPubKey)) {
-            self.refundDeposit(msg);
+            self.refundDeposit(ctx, msg);
             return;
         }
 
@@ -116,38 +144,71 @@ contract ChatPool {
         let vs: Slice = voucherCell.beginParse();
         let vChatId: Int = vs.loadInt(64);
         let vJettonMaster: Address = vs.loadAddress();
-        let vExpectedWallet: Address = vs.loadAddress();
         let vExpiry: Int = vs.loadUint(64);
         vs.endParse();
 
-        // The critical source check: the jettons really arrived from the
-        // pool's own jetton wallet, not a forged notification. A master can
-        // never be re-pointed to another wallet once registered.
-        let knownWallet: Address? = self.jettonWallets.get(vJettonMaster);
-        let walletMismatch: Bool = false;
-        if (knownWallet != null) {
-            walletMismatch = knownWallet!! != vExpectedWallet;
-        }
+        let admin: Address? = self.admin;
         if (vChatId != self.chatId
-            // No funds before an admin exists: an adminless pool is the one
-            // a leaked backend key could take over (SetAdmin init).
-            || self.admin == null
+            || vJettonMaster != jettonMaster!!
             || now() >= vExpiry
-            || ctx.sender != vExpectedWallet
-            || walletMismatch
+            || admin == null
+            || msg.sender != admin!!
             // This handler's gas comes out of the depositor's
             // forward_ton_amount, never out of the pool balance.
             || ctx.value < PoolDepositGas) {
-            self.refundDeposit(msg);
+            self.refundDeposit(ctx, msg);
             return;
         }
 
-        self.jettonWallets.set(vJettonMaster, vExpectedWallet);
-        self.walletMasters.set(vExpectedWallet, vJettonMaster);
         self.balances.set(vJettonMaster, self.balanceOrZero(vJettonMaster) + msg.amount);
 
         // No fee: the forwarded TON beyond the gas goes back to the depositor.
         self.refundExcess(ctx, msg.sender, msg.queryId);
+    }
+
+    // ---- RegisterJetton: TEP-89 discovery of the pool's own wallet ----
+    receive(msg: RegisterJetton) {
+        self.requireAdmin();
+        require(self.jettonWallets.get(msg.jettonMaster) == null, "jetton already registered");
+        require(context().value >= PoolRegisterJettonValue, "attach more TON for gas");
+        // a new request replaces an unanswered one
+        self.lastQueryId = self.lastQueryId + 1;
+        self.pendingWallets.set(msg.jettonMaster, self.lastQueryId);
+        send(SendParameters{
+            to: msg.jettonMaster,
+            value: 0,
+            mode: SendRemainingValue,
+            bounce: true,
+            body: ProvideWalletAddress{
+                queryId: self.lastQueryId,
+                ownerAddress: myAddress(),
+                includeAddress: false
+            }.toCell()
+        });
+    }
+
+    // Only the master asked, answering the query it was asked. A wallet that
+    // already belongs to another master is refused (CP-2).
+    receive(msg: TakeWalletAddress) {
+        self.requireInitialized();
+        let pending: Int? = self.pendingWallets.get(sender());
+        require(pending != null && pending!! == msg.queryId, "unexpected wallet address reply");
+        require(msg.walletAddress != null, "jetton master reported no wallet");
+        let wallet: Address = msg.walletAddress!!;
+        require(self.walletMasters.get(wallet) == null, "wallet already registered for another jetton");
+        self.pendingWallets.set(sender(), null);
+        self.jettonWallets.set(sender(), wallet);
+        self.walletMasters.set(wallet, sender());
+        self.returnToAdmin(msg.queryId);
+    }
+
+    // A master that does not speak TEP-89 rejects the request: drop it.
+    bounced(msg: bounced<ProvideWalletAddress>) {
+        let pending: Int? = self.pendingWallets.get(sender());
+        if (pending != null && pending!! == msg.queryId) {
+            self.pendingWallets.set(sender(), null);
+        }
+        self.returnToAdmin(msg.queryId);
     }
 
     // ---- SetAdmin: backend-signed voucher; init and rotation share the path.
@@ -222,7 +283,7 @@ contract ChatPool {
 
         // Keep the storage rent, forward the rest of the claimer's TON.
         nativeReserve(myBalance() - ctx.value + PoolClaimStorageFee, 0);
-        self.sendJettons(wallet!!, vNonce, vAmount, vRecipient, SendRemainingBalance);
+        self.sendJettons(wallet!!, vNonce, vAmount, vRecipient, vRecipient, SendRemainingBalance);
     }
 
     // ---- Safety controls: admin only ----
@@ -252,32 +313,49 @@ contract ChatPool {
         self.returnValue();
     }
 
-    // ---- Withdraw: admin only, no backend; the jetton wallet is the source
-    // of truth for the amount actually moved, so the ledger is best-effort
-    // (the admin may also sweep jettons that arrived outside the ledger). ----
+    // ---- Withdrawals: admin only, no backend ----
+    // Tracked jettons: at most what the ledger holds (CP-5).
     receive(msg: WithdrawRemainder) {
         self.requireAdmin();
         require(msg.amount > 0, "zero withdrawal");
         require(context().value >= PoolMinWithdrawValue, "attach more TON for gas");
         let wallet: Address? = self.jettonWallets.get(msg.jettonMaster);
         require(wallet != null, "jetton not registered");
-
         let bal: Int = self.balanceOrZero(msg.jettonMaster);
-        let queryId: Int = QueryWithdrawTracked;
-        if (msg.amount > bal) {
-            queryId = QueryWithdrawUntracked;
-            self.balances.set(msg.jettonMaster, 0);
-        } else {
-            self.balances.set(msg.jettonMaster, bal - msg.amount);
-        }
+        require(msg.amount <= bal, "amount exceeds the tracked balance");
+        self.balances.set(msg.jettonMaster, bal - msg.amount);
+        self.sendJettons(wallet!!, QueryWithdrawTracked, msg.amount, msg.to, sender(), SendRemainingValue);
+    }
 
-        self.sendJettons(wallet!!, queryId, msg.amount, msg.to, SendRemainingValue);
+    // Untracked jettons: the ledger never changes (CP-5, CP-11).
+    receive(msg: SweepUntracked) {
+        self.requireAdmin();
+        require(msg.amount > 0, "zero withdrawal");
+        require(context().value >= PoolMinWithdrawValue, "attach more TON for gas");
+        let wallet: Address? = self.jettonWallets.get(msg.jettonMaster);
+        require(wallet != null, "jetton not registered");
+        self.sendJettons(wallet!!, QuerySweepUntracked, msg.amount, msg.to, sender(), SendRemainingValue);
+    }
+
+    // The pool's own TON above its storage reserve (CP-13): the amount and
+    // what the admin attached, minus gas, go to `to`.
+    receive(msg: WithdrawTon) {
+        self.requireAdmin();
+        require(msg.amount > 0, "zero withdrawal");
+        let keep: Int = myBalance() - context().value - msg.amount;
+        require(keep >= PoolMinTonReserve, "would go below the TON reserve");
+        nativeReserve(keep, 0);
+        send(SendParameters{
+            to: msg.to,
+            value: 0,
+            mode: SendRemainingBalance,
+            bounce: false
+        });
     }
 
     // ---- Bounced transfer: the jettons never left the pool's wallet, so
-    // undo the ledger debit (and release the claim nonce so the backend's
-    // reconciliation sees the voucher as unused). Only wallets registered by
-    // a verified deposit are trusted as bounce sources. ----
+    // undo the ledger debit. Only registered wallets are trusted as bounce
+    // sources. ----
     bounced(msg: bounced<JettonTransfer>) {
         let jettonMaster: Address? = self.walletMasters.get(sender());
         if (jettonMaster == null) {
@@ -294,8 +372,8 @@ contract ChatPool {
                 self.daySpent.set(jettonMaster!!, spent);
             }
         } else if (q != QueryWithdrawTracked) {
-            // Untracked withdrawals and refunds were never (fully) in the
-            // ledger; crediting them back could overstate the balance.
+            // Sweeps and refunds were never in the ledger; crediting them
+            // back would overstate the balance.
             return;
         }
         self.balances.set(jettonMaster!!, self.balanceOrZero(jettonMaster!!) + msg.amount);
@@ -315,9 +393,23 @@ contract ChatPool {
         });
     }
 
-    fun refundDeposit(msg: JettonTransferNotification) {
-        if (msg.amount > 0) {
-            self.sendJettons(sender(), QueryRefund, msg.amount, msg.sender, SendRemainingValue);
+    fun refundDeposit(ctx: Context, msg: JettonTransferNotification) {
+        if (msg.amount > 0 && ctx.value >= PoolMinRefundValue) {
+            self.sendJettons(ctx.sender, QueryRefund, msg.amount, msg.sender, msg.sender, SendRemainingValue);
+        }
+    }
+
+    // TEP-89 leftovers go to the admin who paid for RegisterJetton.
+    fun returnToAdmin(queryId: Int) {
+        let admin: Address? = self.admin;
+        if (admin != null) {
+            send(SendParameters{
+                to: admin!!,
+                value: 0,
+                mode: SendRemainingValue + SendIgnoreErrors,
+                bounce: false,
+                body: TonExcesses{queryId: queryId}.toCell()
+            });
         }
     }
 
@@ -325,7 +417,8 @@ contract ChatPool {
     // or SendRemainingBalance after a nativeReserve that keeps the storage rent.
     // forward_payload is TEP-74 (Either Cell ^Cell): it needs at least the
     // Either bit (0 = inline, empty), or real wallets throw (708 / USDT 9).
-    fun sendJettons(wallet: Address, queryId: Int, amount: Int, to: Address, mode: Int) {
+    // `response` gets the jetton wallet's excess.
+    fun sendJettons(wallet: Address, queryId: Int, amount: Int, to: Address, response: Address, mode: Int) {
         send(SendParameters{
             to: wallet,
             value: 0,
@@ -335,7 +428,7 @@ contract ChatPool {
                 queryId: queryId,
                 amount: amount,
                 destination: to,
-                responseDestination: to,
+                responseDestination: response,
                 customPayload: null,
                 forwardTonAmount: 0,
                 forwardPayload: beginCell().storeUint(0, 1).asSlice()
@@ -412,6 +505,15 @@ contract ChatPool {
 
     get fun jettonWallet(jettonMaster: Address): Address? {
         return self.jettonWallets.get(jettonMaster);
+    }
+
+    // queryId of an unanswered RegisterJetton, 0 when none.
+    get fun pendingJettonRegistration(jettonMaster: Address): Int {
+        let q: Int? = self.pendingWallets.get(jettonMaster);
+        if (q == null) {
+            return 0;
+        }
+        return q!!;
     }
 
     get fun poolAdmin(): Address? {

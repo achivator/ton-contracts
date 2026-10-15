@@ -46,3 +46,21 @@ export function signLegacyVoucher(voucher: Cell, kp: KeyPair, tag: bigint, targe
     const envelope = beginCell().storeUint(tag, 32).storeAddress(target).storeRef(voucher).endCell();
     return sign(envelope.hash(), kp.secretKey);
 }
+
+// DepositVoucher in the layout of the pool's protocol version. v3 names no
+// wallet (the pool credits only its TEP-89-registered wallet): int64 chatId,
+// address jettonMaster, uint64 expiry. v2 pools still parse int64 chatId,
+// address jettonMaster, address expectedJettonWallet, uint64 expiry.
+export function depositVoucherCell(
+    version: number,
+    v: { chatId: bigint; jettonMaster: Address; expiry: bigint; expectedJettonWallet?: Address },
+): Cell {
+    const b = beginCell().storeInt(v.chatId, 64).storeAddress(v.jettonMaster);
+    if (version === 2) {
+        if (!v.expectedJettonWallet) throw new Error('a v2 deposit voucher names the pool jetton wallet');
+        b.storeAddress(v.expectedJettonWallet);
+    } else if (version !== 3) {
+        throw new Error(`no deposit voucher layout for protocol v${version}`);
+    }
+    return b.storeUint(v.expiry, 64).endCell();
+}

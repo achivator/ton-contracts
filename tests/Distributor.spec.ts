@@ -11,13 +11,14 @@ import {
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import '@ton/test-utils';
 import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { provideWalletQuery, takeWalletAddressBody } from './helpers/tep89';
 
 const CHAT_ID = 1001234567890n;
 const JETTON_TRANSFER_OP = 0x0f8a7ea5;
 const EXCESSES_OP = 0xd53276db;
 const REFUND_QUERY = 0x8000000000000003n;
 const WITHDRAW_TRACKED_QUERY = 0x8000000000000001n;
-const WITHDRAW_UNTRACKED_QUERY = 0x8000000000000002n;
+const SWEEP_UNTRACKED_QUERY = 0x8000000000000002n;
 
 function pubKeyBigInt(kp: KeyPair): bigint {
     return BigInt('0x' + kp.publicKey.toString('hex'));
@@ -26,7 +27,6 @@ function pubKeyBigInt(kp: KeyPair): bigint {
 function depositForwardPayload(args: {
     chatId: bigint;
     jettonMaster: Address;
-    expectedJettonWallet: Address;
     expiry: bigint;
     kp: KeyPair;
     pool: Address;
@@ -38,7 +38,6 @@ function depositForwardPayload(args: {
                 $$type: 'DepositVoucher',
                 chatId: args.chatId,
                 jettonMaster: args.jettonMaster,
-                expectedJettonWallet: args.expectedJettonWallet,
                 expiry: args.expiry,
             }),
         )
@@ -78,11 +77,12 @@ describe('Token Distribution', () => {
     let admin: SandboxContract<TreasuryContract>;
     let user: SandboxContract<TreasuryContract>;
     let jettonWallet: SandboxContract<TreasuryContract>; // the pool's jetton wallet
+    let jettonMasterT: SandboxContract<TreasuryContract>; // answers the pool's TEP-89 request
     let backend: KeyPair;
     let pool: SandboxContract<ChatPool>;
     let globalId: number; // the sandbox network's, as the contracts read it
 
-    const jettonMaster = new Address(0, Buffer.alloc(32, 3));
+    let jettonMaster: Address;
     const farFuture = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
     beforeEach(async () => {
@@ -93,6 +93,8 @@ describe('Token Distribution', () => {
         admin = await blockchain.treasury('admin');
         user = await blockchain.treasury('user');
         jettonWallet = await blockchain.treasury('jettonWallet');
+        jettonMasterT = await blockchain.treasury('jettonMaster');
+        jettonMaster = jettonMasterT.address;
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
         pool = blockchain.openContract(await ChatPool.fromInit(master.address, CHAT_ID));
@@ -111,7 +113,7 @@ describe('Token Distribution', () => {
         });
     });
 
-    // Deposits are refunded until the pool has an admin.
+    // Deposits are refunded until the pool has an admin (and a registered jetton).
     async function initAdmin() {
         const v = setAdminVoucher({
             chatId: CHAT_ID,
@@ -125,12 +127,30 @@ describe('Token Distribution', () => {
         return pool.send(admin.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...v });
     }
 
-    async function deposit(amount: bigint) {
+    // RegisterJetton: the pool asks the jetton master (TEP-89) for its wallet;
+    // the treasury playing the master answers with `jettonWallet`.
+    async function registerJetton() {
         if ((await pool.getPoolAdmin()) === null) await initAdmin();
+        if ((await pool.getJettonWallet(jettonMaster)) !== null) return;
+        const req = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster },
+        );
+        const q = provideWalletQuery(req, pool.address, jettonMaster)!;
+        const res = await jettonMasterT.send({
+            to: pool.address,
+            value: toNano('0.05'),
+            body: takeWalletAddressBody(q.queryId, jettonWallet.address),
+        });
+        expect(res.transactions).toHaveTransaction({ to: pool.address, success: true });
+    }
+
+    async function deposit(amount: bigint) {
+        await registerJetton();
         const forwardPayload = depositForwardPayload({
             chatId: CHAT_ID,
             jettonMaster,
-            expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
             globalId,
@@ -198,7 +218,7 @@ describe('Token Distribution', () => {
     }
 
     it('credits a deposit, takes no fee and returns the forwarded TON', async () => {
-        await initAdmin();
+        await registerJetton();
         const poolBefore = (await blockchain.getContract(pool.address)).balance;
         const res = await deposit(toNano('1000'));
 
@@ -232,7 +252,6 @@ describe('Token Distribution', () => {
         const forwardPayload = depositForwardPayload({
             chatId: CHAT_ID,
             jettonMaster,
-            expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
             globalId,
@@ -261,12 +280,11 @@ describe('Token Distribution', () => {
     });
 
     it('rejects a deposit with a bad signature', async () => {
-        await initAdmin();
+        await registerJetton();
         const wrongKey = keyPairFromSeed(Buffer.alloc(32, 9));
         const forwardPayload = depositForwardPayload({
             chatId: CHAT_ID,
             jettonMaster,
-            expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: wrongKey,
             globalId,
@@ -670,13 +688,12 @@ describe('Token Distribution', () => {
 
     // ---- audit regressions ----
 
-    it('refunds a deposit whose forward TON does not cover the gas, instead of paying it from the pool', async () => {
-        await initAdmin();
+    it('keeps a deposit whose forward TON covers neither its gas nor a refund, paying nothing from the pool', async () => {
+        await registerJetton();
         const poolBefore = (await blockchain.getContract(pool.address)).balance;
         const forwardPayload = depositForwardPayload({
             chatId: CHAT_ID,
             jettonMaster,
-            expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
             globalId,
@@ -693,7 +710,10 @@ describe('Token Distribution', () => {
                 forwardPayload,
             },
         );
-        expectRefund(res, toNano('1000'));
+        expect(res.transactions).toHaveTransaction({ from: jettonWallet.address, to: pool.address, success: true });
+        // a refund with 0.01 TON would bounce in a real wallet: the jettons
+        // stay, untracked, for the admin to sweep
+        expect(res.transactions).not.toHaveTransaction({ from: pool.address, op: JETTON_TRANSFER_OP });
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
         expect((await blockchain.getContract(pool.address)).balance).toBeGreaterThanOrEqual(
             poolBefore - toNano('0.001'),
@@ -701,12 +721,11 @@ describe('Token Distribution', () => {
     });
 
     it('refunds a deposit voucher signed for another pool or as another voucher kind', async () => {
-        await initAdmin();
+        await registerJetton();
         const other = await blockchain.treasury('otherPool');
         const base = {
             chatId: CHAT_ID,
             jettonMaster,
-            expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
             globalId,
@@ -738,19 +757,18 @@ describe('Token Distribution', () => {
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
     });
 
-    it('never re-points a registered jetton to another wallet', async () => {
+    it('credits nothing that arrives from an unregistered wallet', async () => {
         await deposit(toNano('10'));
         const rogueWallet = await blockchain.treasury('rogueWallet');
         const forwardPayload = depositForwardPayload({
             chatId: CHAT_ID,
             jettonMaster,
-            expectedJettonWallet: rogueWallet.address,
             expiry: farFuture,
             kp: backend,
             globalId,
             pool: pool.address,
         });
-        await pool.send(
+        const res = await pool.send(
             rogueWallet.getSender(),
             { value: toNano('0.5') },
             {
@@ -761,6 +779,12 @@ describe('Token Distribution', () => {
                 forwardPayload,
             },
         );
+        // refunded to the notifier, which can only move its own jettons
+        expect(res.transactions).toHaveTransaction({
+            from: pool.address,
+            to: rogueWallet.address,
+            op: JETTON_TRANSFER_OP,
+        });
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('10'));
         expect((await pool.getJettonWallet(jettonMaster))!.equals(jettonWallet.address)).toBe(true);
     });
@@ -877,11 +901,10 @@ describe('Token Distribution', () => {
 
     // ---- leaked-key blast radius ----
 
-    it('refunds deposits while the pool has no admin (nothing for a leaked key to take over)', async () => {
+    it('refunds deposits while the pool has no admin (no jetton can be registered yet)', async () => {
         const forwardPayload = depositForwardPayload({
             chatId: CHAT_ID,
             jettonMaster,
-            expectedJettonWallet: jettonWallet.address,
             expiry: farFuture,
             kp: backend,
             globalId,
@@ -1061,7 +1084,7 @@ describe('Token Distribution', () => {
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
     });
 
-    it('restores the ledger when a tracked withdrawal bounces, but not for an untracked one', async () => {
+    it('restores the ledger when a tracked withdrawal bounces, but not for a sweep', async () => {
         await deposit(toNano('1000'));
 
         // tracked: amount <= balance, ledger debited to 900
@@ -1107,24 +1130,24 @@ describe('Token Distribution', () => {
         );
         expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
 
-        // untracked: amount > balance zeroes the ledger; its bounce must not
-        // credit anything back (the jettons never were in the ledger)
+        // untracked: a sweep never touches the ledger, and its bounce must
+        // not credit anything back (the jettons never were in the ledger)
         await pool.send(
             admin.getSender(),
             { value: toNano('0.1') },
             {
-                $$type: 'WithdrawRemainder',
+                $$type: 'SweepUntracked',
                 jettonMaster,
                 amount: toNano('2000'),
                 to: admin.address,
             },
         );
-        expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
+        expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
         const untracked = beginCell()
             .store(
                 storeJettonTransfer({
                     $$type: 'JettonTransfer',
-                    queryId: WITHDRAW_UNTRACKED_QUERY,
+                    queryId: SWEEP_UNTRACKED_QUERY,
                     amount: toNano('2000'),
                     destination: admin.address,
                     responseDestination: admin.address,
@@ -1147,7 +1170,7 @@ describe('Token Distribution', () => {
                 bounced: true,
             }),
         );
-        expect(await pool.getBalanceOf(jettonMaster)).toEqual(0n);
+        expect(await pool.getBalanceOf(jettonMaster)).toEqual(toNano('1000'));
     });
 
     it('rejects admin vouchers signed as another kind or for another pool', async () => {
@@ -1213,14 +1236,13 @@ describe('Token Distribution', () => {
     });
 
     it('aborts a deposit whose voucher carries trailing data (backend-signed, so a throw, not a refund)', async () => {
-        await initAdmin();
+        await registerJetton();
         const voucher = beginCell()
             .store(
                 storeDepositVoucher({
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster,
-                    expectedJettonWallet: jettonWallet.address,
                     expiry: farFuture,
                 }),
             )

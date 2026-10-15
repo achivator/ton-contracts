@@ -25,6 +25,8 @@ import {
 } from '../../wrappers/ChatPool';
 import { DistributorMaster } from '../../wrappers/DistributorMaster';
 import { globalIdOf, signatureCell, signVoucher, TAG } from './vouchers';
+import { provideWalletQuery, takeWalletAddressBody } from './tep89';
+export { provideWalletQuery, takeWalletAddressBody } from './tep89';
 
 export const CHAT_ID = -1001234567890n;
 // A fixed clock: boundary tests move it explicitly.
@@ -195,30 +197,6 @@ export function claimMsg(
 
 export function claim(env: PoolEnv, args: Parameters<typeof claimMsg>[1], value = toNano('0.15')) {
     return env.pool.send(env.user.getSender(), { value }, claimMsg(env, args));
-}
-
-// The outbound provide_wallet_address the pool sent to `jettonMaster`.
-export function provideWalletQuery(res: SendMessageResult, pool: Address, jettonMaster: Address) {
-    for (const tx of res.transactions) {
-        const m = tx.inMessage;
-        if (!m || m.info.type !== 'internal') continue;
-        if (!m.info.src.equals(pool) || !m.info.dest.equals(jettonMaster)) continue;
-        const s = m.body.beginParse();
-        if (s.remainingBits < 32 || s.loadUint(32) !== OP.ProvideWalletAddress) continue;
-        const queryId = s.loadUintBig(64);
-        const owner = s.loadAddress();
-        const includeAddress = s.loadBit();
-        return { queryId, owner, includeAddress };
-    }
-    return null;
-}
-
-// take_wallet_address#d1735400 query_id:uint64 wallet_address:MsgAddress owner_address:(Maybe ^MsgAddress)
-export function takeWalletAddressBody(queryId: bigint, wallet: Address | null): Cell {
-    const b = beginCell().storeUint(OP.TakeWalletAddress, 32).storeUint(queryId, 64);
-    if (wallet) b.storeAddress(wallet);
-    else b.storeUint(0, 2);
-    return b.storeMaybeRef(null).endCell();
 }
 
 // RegisterJetton for a jetton master played by a treasury: the test answers

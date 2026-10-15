@@ -78,6 +78,19 @@ describe('TestJetton flow', () => {
         return p;
     }
 
+    // RegisterJetton: the pool asks the test minter (TEP-89) for its wallet.
+    async function registerJetton(target: SandboxContract<ChatPool>, by: SandboxContract<TreasuryContract>) {
+        const res = await target.send(
+            by.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster: minter.address },
+        );
+        expect(res.transactions).toHaveTransaction({ from: minter.address, to: target.address, success: true });
+        expect(
+            (await target.getJettonWallet(minter.address))!.equals(await minter.getGetWalletAddress(target.address)),
+        ).toBe(true);
+    }
+
     async function setAdmin(
         target: SandboxContract<ChatPool>,
         chatId: bigint,
@@ -118,6 +131,7 @@ describe('TestJetton flow', () => {
 
     it('deposits through real wallets (reproduce testnet flow)', async () => {
         await setAdmin(pool, CHAT_ID, admin); // deposits are refunded until then
+        await registerJetton(pool, admin);
         const adminWalletAddr = await minter.getGetWalletAddress(admin.address);
         const poolWalletAddr = await minter.getGetWalletAddress(pool.address);
 
@@ -127,7 +141,6 @@ describe('TestJetton flow', () => {
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster: minter.address,
-                    expectedJettonWallet: poolWalletAddr,
                     expiry: farFuture,
                 }),
             )
@@ -178,6 +191,7 @@ describe('TestJetton flow', () => {
 
     it('accepts a verbatim ref-wrapped payload (stock wallet behavior)', async () => {
         await setAdmin(pool, CHAT_ID, admin);
+        await registerJetton(pool, admin);
         const poolWalletAddr = await minter.getGetWalletAddress(pool.address);
 
         const voucher = beginCell()
@@ -186,7 +200,6 @@ describe('TestJetton flow', () => {
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster: minter.address,
-                    expectedJettonWallet: poolWalletAddr,
                     expiry: farFuture,
                 }),
             )
@@ -282,7 +295,6 @@ describe('TestJetton flow', () => {
                         $$type: 'DepositVoucher',
                         chatId,
                         jettonMaster: minter.address,
-                        expectedJettonWallet: await minter.getGetWalletAddress(pool.address),
                         expiry: farFuture,
                     }),
                 )
@@ -341,6 +353,8 @@ describe('TestJetton flow', () => {
 
         await setAdmin(pool, CHAT_ID, admin);
         await setAdmin(poolB, CHAT_ID_B, adminB);
+        await registerJetton(pool, admin);
+        await registerJetton(poolB, adminB);
         await depositTo(pool, CHAT_ID, admin, toNano('100'));
         await depositTo(poolB, CHAT_ID_B, adminB, toNano('500'));
         // lift the default 10%/day claim budget so the whole balance can move

@@ -5,6 +5,7 @@ import { flattenTransaction } from '@ton/test-utils';
 import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher } from '../wrappers/ChatPool';
 import '@ton/test-utils';
 import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { provideWalletQuery, takeWalletAddressBody } from './helpers/tep89';
 import {
     mintToRealWallet,
     REAL_JETTON_WALLETS,
@@ -85,6 +86,20 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
 
         poolWallet = realWalletAddress(realWallet, pool.address, jettonMaster.address);
+        // RegisterJetton: the treasury playing the jetton master answers the
+        // pool's TEP-89 request with the pool's real wallet address
+        const req = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster: jettonMaster.address },
+        );
+        const q = provideWalletQuery(req, pool.address, jettonMaster.address)!;
+        await jettonMaster.send({
+            to: pool.address,
+            value: toNano('0.05'),
+            body: takeWalletAddressBody(q.queryId, poolWallet),
+        });
+        expect((await pool.getJettonWallet(jettonMaster.address))!.equals(poolWallet)).toBe(true);
         adminWallet = realWalletAddress(realWallet, admin.address, jettonMaster.address);
         userWallet = realWalletAddress(realWallet, user.address, jettonMaster.address);
 
@@ -107,7 +122,6 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster: jettonMaster.address,
-                    expectedJettonWallet: poolWallet,
                     expiry: farFuture,
                 }),
             )

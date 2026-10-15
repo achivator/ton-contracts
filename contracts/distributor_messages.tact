@@ -35,6 +35,21 @@ message(0x7362d09c) JettonTransferNotification {
     forwardPayload: Slice as remaining;
 }
 
+// ---- Jetton wallet discovery (TEP-89) ----
+// ChatPool asks a jetton master for its own wallet and trusts only the
+// master's answer, never a voucher or a notification (CP-1).
+message(0x2c76b973) ProvideWalletAddress {
+    queryId: Int as uint64;
+    ownerAddress: Address;
+    includeAddress: Bool;
+}
+
+message(0xd1735400) TakeWalletAddress {
+    queryId: Int as uint64;
+    walletAddress: Address?;     // addr_none when the master cannot tell
+    ownerAddress: Cell?;         // Maybe ^MsgAddress, only if asked for
+}
+
 // ---- Wire structs (documentation of the signed-cell layout) ----
 //
 // These mirror exactly the cells the backend serialises and signs, and the
@@ -49,11 +64,14 @@ const VoucherTagClaim: Int = 0x434c4d31;     // "CLM1", target = pool
 const VoucherTagAdmin: Int = 0x41444d31;     // "ADM1", target = pool
 
 // Carried (as a ref) inside JettonTransferNotification.forwardPayload,
-// followed by a 512-bit ed25519 signature (see SignedVoucher).
+// followed by a 512-bit ed25519 signature (see SignedVoucher). Protocol v3
+// names no wallet: the pool credits only jettons that arrive from the
+// wallet it registered for jettonMaster (RegisterJetton, TEP-89), and only
+// when the depositor is the pool admin. (v2 pools still take the v2 layout
+// with an expectedJettonWallet after jettonMaster.)
 struct DepositVoucher {
     chatId: Int as int64;
     jettonMaster: Address;
-    expectedJettonWallet: Address;   // the pool's own jetton wallet (backend-derived)
     expiry: Int as uint64;
 }
 
@@ -79,11 +97,39 @@ struct AdminInitVoucher {
 }
 
 // ---- ChatPool messages ----
-// admin-only, NEVER requires the backend
+// Admin-only, none of them needs the backend.
+
+// Moves tracked jettons out: at most what the ledger holds for the jetton.
 message WithdrawRemainder {
     jettonMaster: Address;
     amount: Int as coins;
     to: Address;
+}
+
+// Registers the pool's wallet of a jetton: the pool asks the jetton master
+// (TEP-89 provide_wallet_address) and registers the wallet from its
+// take_wallet_address reply. Needed before the first deposit of a jetton,
+// and enough to sweep jettons that reached an unregistered wallet.
+message RegisterJetton {
+    jettonMaster: Address;
+}
+
+// Moves jettons the ledger does not track (strays, kept underfunded
+// deposits) out of a registered wallet. The ledger never changes, not even
+// on a bounce. Sweeping more than the untracked surplus takes tracked
+// jettons with it: the ledger then overstates the wallet and claims for the
+// difference bounce, which only the admin can cause, and only to its pool.
+message SweepUntracked {
+    jettonMaster: Address;
+    amount: Int as coins;
+    to: Address;
+}
+
+// Moves the pool's own TON out (claim storage fees, top-ups), never below
+// PoolMinTonReserve.
+message WithdrawTon {
+    to: Address;
+    amount: Int as coins;
 }
 
 // ---- Admin-only safety controls. They limit what a leaked backend key can
