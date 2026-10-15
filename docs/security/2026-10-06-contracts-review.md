@@ -13,7 +13,11 @@
 
 Shared code: `voucher.tact` (the `SignedVoucher` envelope), `distributor_messages.tact` and `achievement_messages.tact`.
 
-**Evidence:** 52 proof-of-concept sandbox tests in `tests/poc/*.poc.spec.ts`. Run them with `npm run test:poc`. Each test **passes while the issue exists**, so it should be inverted or deleted once the fix lands. The PoCs are kept out of the default `npm test`. The real-jetton comparisons embed the code BOCs of the upstream reference TEP-74 wallet (`ton-blockchain/token-contract`) and the USDT wallet (`ton-blockchain/stablecoin-contract`).
+**Evidence:** 49 proof-of-concept (52 originally; the three TJW-6 tests were removed once X-1 was fixed) sandbox tests in `tests/poc/*.poc.spec.ts`. Run them with `npm run test:poc`. Each test **passes while the issue exists**, so it should be inverted or deleted once the fix lands. The PoCs are kept out of the default `npm test`. The real-jetton comparisons embed the code BOCs of the upstream reference TEP-74 wallet (`ton-blockchain/token-contract`) and the USDT wallet (`ton-blockchain/stablecoin-contract`).
+
+## Status updates
+
+-   **2026-10-11: X-1 fixed** in achivator/ton-contracts#6 (`bdd3c0e`). ChatPool now sends the TEP-74 `Either` bit, and `tests/RealJettonWallets.spec.ts` runs deposit, claim, withdraw and refund through the real reference and USDT wallets in the default `npm test`. The TJW-6 PoC was removed. **Pools deployed from an earlier master keep the bug**: their jettons stay locked, so the fixed code needs a new master deployment.
 
 Status legend: **CONFIRMED** means a PoC demonstrates the issue. **THEORETICAL** means the issue was derived from the code or from measurements but not executed end to end.
 
@@ -21,7 +25,7 @@ Status legend: **CONFIRMED** means a PoC demonstrates the issue. **THEORETICAL**
 
 ## 1. Executive summary
 
-1. **Critical: ChatPool cannot pay out real jettons.** Every outbound `JettonTransfer` that ChatPool sends has an empty `forward_payload`, with no `Either` bit (`chat_pool.tact:307`). The stock TEP-74 wallet rejects it with exit 708, and USDT rejects it with exit 9. Deposits are credited normally, but **every claim, withdrawal and deposit refund bounces**. The contracts are immutable, so jettons already in a pool are **locked permanently**. The test suite never caught this because `TestJettonWallet` and the treasury-as-wallet mocks never parse that field. If any pool on mainnet holds real jettons, treat this as an incident.
+1. **Critical (fixed in #6 for new deployments): ChatPool cannot pay out real jettons.** Every outbound `JettonTransfer` that ChatPool sends has an empty `forward_payload`, with no `Either` bit (`chat_pool.tact:307`). The stock TEP-74 wallet rejects it with exit 708, and USDT rejects it with exit 9. Deposits are credited normally, but **every claim, withdrawal and deposit refund bounces**. The contracts are immutable, so jettons already in a pool are **locked permanently**. The test suite never caught this because `TestJettonWallet` and the treasury-as-wallet mocks never parse that field. If any pool on mainnet holds real jettons, treat this as an incident.
 2. **High: AchievementRegistry will brick itself.** Per-mint state (`usedNonces` and `mintedUsers`) grows by about 2 cells per mint and is never pruned. When the account reaches the `max_acc_state_cells = 65536` limit, every mint and every registration fails with action code 50. That happens after about 31.5k mints _in total_. An attacker gets there for about 1.5 TON, because the URL length cap only follows `ref[0]` (AR-1) and a register voucher can be replayed (AR-3).
 3. **High: deposits go to whoever holds the admin slot.** ChatPool accepts a deposit from anyone once _any_ admin exists. Three ways the wrong party can hold that slot: a leaked backend key, a testnet voucher replayed on mainnet, or a Telegram ownership change (the old owner keeps the slot for good). In each case, the chat creator's deposits can be withdrawn by that party.
 4. **Systemic: vouchers are not bound to a network.** The comment in `voucher.tact` says a key may be shared between testnet and mainnet. With the same owner mnemonic (v4 wallet) and the same key, the master, every pool and the registry get **identical addresses on both networks**, so testnet vouchers verify on mainnet.
@@ -43,11 +47,11 @@ IDs are prefixed by contract: CP = ChatPool, DM = DistributorMaster, AR = Achiev
 
 ### Critical
 
-| ID              | Title                                                                                                                                           | Location                                                                                                                                | Status    |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| **X-1** (TJW-6) | ChatPool's outbound `JettonTransfer` has no `Either` bit in `forward_payload`, so standard and USDT wallets reject it and pool funds are locked | `chat_pool.tact:307` (`forwardPayload: emptySlice()`); masked by `test_jetton.tact:141-163` and `tests/Distributor.spec.ts:723,914,941` | CONFIRMED |
+| ID              | Title                                                                                                                                           | Location                                                                                                                                | Status         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| **X-1** (TJW-6) | ChatPool's outbound `JettonTransfer` has no `Either` bit in `forward_payload`, so standard and USDT wallets reject it and pool funds are locked | `chat_pool.tact:307` (`forwardPayload: emptySlice()`); masked by `test_jetton.tact:141-163` and `tests/Distributor.spec.ts:723,914,941` | **FIXED** (#6) |
 
-The PoC (`TestJettonWallet.poc.spec.ts`, "TJW-6") runs the same ChatPool claim and WithdrawRemainder against three wallets:
+The PoC (`TestJettonWallet.poc.spec.ts`, "TJW-6", since removed) runs the same ChatPool claim and WithdrawRemainder against three wallets:
 
 -   **Reference wallet:** bounces with 708 (`slice_bits(either_forward_payload) >= 1`).
 -   **USDT wallet:** bounces with 9 (`check_either_forward_payload`).
@@ -291,7 +295,7 @@ These come from patterns across the whole codebase rather than from any one line
 
 ## 5. Recommended order of work
 
-1. **Now:** find out whether any mainnet pool holds real jettons (X-1). If so, plan the migration and communication. Fix `chat_pool.tact:307`, and add the real-wallet tests (vendored BOCs) to the default suite.
+1. **Now:** the code fix is merged (#6). Still to do: find out whether any mainnet pool holds real jettons (X-1). If so, plan the migration and communication. Deploy a new master with the fixed ChatPool code.
 2. **Before the next deploy (it is a redeploy anyway):** X-2 network binding, CP-9 depositor/admin binding, CP-1 on-chain wallet discovery, DM-2 rotation-stable addressing, AR-1/AR-2/AR-3 registry redesign (address-derived uniqueness), AR-6 registry key rotation, CP-3 rolling window, X-3 nonce pruning.
 3. **Backend:** CP-10 finality margin; issue deposit vouchers only to the admin; rotation vouchers; per-network keys; check the template id from the event (AR-5).
 4. **Product decisions:** soulbound vs tradeable (AI-3), TEP-66 royalty (AI-2), privacy (AR-7).
