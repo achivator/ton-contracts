@@ -3,7 +3,7 @@ import { Address, beginCell, Cell, toNano } from '@ton/core';
 import { keyPairFromSeed, KeyPair } from '@ton/crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher } from '../../wrappers/ChatPool';
+import { ChatPool, storeAdminInitVoucher } from '../../wrappers/ChatPool';
 import { DistributorMaster } from '../../wrappers/DistributorMaster';
 // ChatPool exactly as compiled inside the master (the code the master really deploys)
 import { ChatPool as MasterChatPool } from '../../build/DistributorMaster/tact_ChatPool';
@@ -22,50 +22,6 @@ function adminVoucher(chatId: bigint, master: Address, admin: Address, kp: KeyPa
         .store(storeAdminInitVoucher({ $$type: 'AdminInitVoucher', chatId, master, admin, expiry: farFuture() }))
         .endCell();
     return { voucherCell: v, signature: signatureCell(signVoucher(v, kp, TAG.Admin, pool, globalId)) };
-}
-
-function depositPayload(chatId: bigint, jm: Address, jw: Address, kp: KeyPair, pool: Address, globalId: number): Cell {
-    const v = beginCell()
-        .store(
-            storeDepositVoucher({
-                $$type: 'DepositVoucher',
-                chatId,
-                jettonMaster: jm,
-                expectedJettonWallet: jw,
-                expiry: farFuture(),
-            }),
-        )
-        .endCell();
-    return beginCell()
-        .storeRef(v)
-        .storeBuffer(signVoucher(v, kp, TAG.Deposit, pool, globalId))
-        .endCell();
-}
-
-function claimVoucher(
-    chatId: bigint,
-    recipient: Address,
-    jm: Address,
-    amount: bigint,
-    nonce: bigint,
-    kp: KeyPair,
-    pool: Address,
-    globalId: number,
-) {
-    const v = beginCell()
-        .store(
-            storeClaimVoucher({
-                $$type: 'ClaimVoucher',
-                chatId,
-                recipient,
-                jettonMaster: jm,
-                amount,
-                nonce,
-                expiry: farFuture(),
-            }),
-        )
-        .endCell();
-    return { voucherCell: v, signature: signVoucher(v, kp, TAG.Claim, pool, globalId) };
 }
 
 async function deployMaster(bc: Blockchain, owner: SandboxContract<TreasuryContract>, key: bigint) {
@@ -97,95 +53,8 @@ describe('DistributorMaster PoC', () => {
         console.log('DM-9 deployed pool abi:', r.stackReader.readString());
     });
 
-    it('DM-1: same owner wallet + same backend key on two networks => identical master/pool addresses; testnet-signed vouchers replay on mainnet', async () => {
-        const testnet = await Blockchain.create();
-        const mainnet = await Blockchain.create();
-        // v4-style wallet from one mnemonic has the same address on both networks
-        const ownerT = await testnet.treasury('owner');
-        const ownerM = await mainnet.treasury('owner');
-        expect(ownerT.address.equals(ownerM.address)).toBe(true);
-
-        const mT = await deployMaster(testnet, ownerT, pub(backend));
-        const mM = await deployMaster(mainnet, ownerM, pub(backend));
-        expect(mT.address.equals(mM.address)).toBe(true);
-
-        const tester = await testnet.treasury('tester');
-        const testerM = await mainnet.treasury('tester');
-        const realAdmin = await mainnet.treasury('realAdmin');
-        // Pools exist on both nets (anyone can CreatePool)
-        await mT.send(tester.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
-        await mM.send(realAdmin.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
-        const poolT = testnet.openContract(ChatPool.fromAddress(await mT.getPoolAddress(CHAT_ID)));
-        const poolM = mainnet.openContract(ChatPool.fromAddress(await mM.getPoolAddress(CHAT_ID)));
-        expect(poolT.address.equals(poolM.address)).toBe(true);
-
-        // (a) admin voucher the TESTNET backend issued to the tester is accepted on MAINNET
-        const av = adminVoucher(CHAT_ID, mT.address, tester.address, backend, poolT.address, globalIdOf(testnet));
-        const rM = await poolM.send(testerM.getSender(), { value: toNano('0.05') }, { $$type: 'SetAdmin', ...av });
-        expect(rM.transactions).toHaveTransaction({ to: poolM.address, success: true });
-        expect((await poolM.getPoolAdmin())!.equals(tester.address)).toBe(true);
-        // the real admin is now locked out of the init path
-        const av2 = adminVoucher(CHAT_ID, mM.address, realAdmin.address, backend, poolM.address, globalIdOf(mainnet));
-        const rReal = await poolM.send(
-            realAdmin.getSender(),
-            { value: toNano('0.05') },
-            { $$type: 'SetAdmin', ...av2 },
-        );
-        expect(rReal.transactions).toHaveTransaction({ to: poolM.address, success: false });
-
-        // (b) claim voucher signed for the testnet pool pays out on mainnet (same jetton master/wallet addresses)
-        const mainnet2 = await Blockchain.create();
-        const owner2 = await mainnet2.treasury('owner');
-        const m2 = await deployMaster(mainnet2, owner2, pub(backend));
-        const adm = await mainnet2.treasury('realAdmin');
-        await m2.send(adm.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
-        const pool2 = mainnet2.openContract(ChatPool.fromAddress(await m2.getPoolAddress(CHAT_ID)));
-        await pool2.send(
-            adm.getSender(),
-            { value: toNano('0.05') },
-            {
-                $$type: 'SetAdmin',
-                ...adminVoucher(CHAT_ID, m2.address, adm.address, backend, pool2.address, globalIdOf(mainnet2)),
-            },
-        );
-        const jw = await mainnet2.treasury('jettonWallet');
-        const jm = new Address(0, Buffer.alloc(32, 3));
-        await pool2.send(
-            jw.getSender(),
-            { value: toNano('0.5') },
-            {
-                $$type: 'JettonTransferNotification',
-                queryId: 0n,
-                amount: toNano('1000'),
-                sender: adm.address,
-                forwardPayload: depositPayload(CHAT_ID, jm, jw.address, backend, pool2.address, globalIdOf(mainnet2)),
-            },
-        );
-        expect(await pool2.getBalanceOf(jm)).toEqual(toNano('1000'));
-        // voucher produced against the TESTNET pool address
-        const cv = claimVoucher(
-            CHAT_ID,
-            tester.address,
-            jm,
-            toNano('50'),
-            777n,
-            backend,
-            poolT.address,
-            globalIdOf(testnet),
-        );
-        const attacker2 = await mainnet2.treasury('tester');
-        const rc = await pool2.send(
-            attacker2.getSender(),
-            { value: toNano('0.15') },
-            {
-                $$type: 'Claim',
-                voucherCell: cv.voucherCell,
-                signature: beginCell().storeBuffer(cv.signature).endCell(),
-            },
-        );
-        expect(rc.transactions).toHaveTransaction({ from: pool2.address, to: jw.address, success: true });
-        expect(await pool2.getBalanceOf(jm)).toEqual(toNano('950'));
-    });
+    // DM-1 (X-2) is fixed: vouchers name their network. The regression test
+    // is tests/NetworkBinding.spec.ts.
 
     it('DM-2: RotateBackendKey silently re-points poolAddress(chatId); the funded pool is orphaned and a 2nd pool can be created for the same chat', async () => {
         const bc = await Blockchain.create();

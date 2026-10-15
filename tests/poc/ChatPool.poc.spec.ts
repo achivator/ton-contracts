@@ -12,7 +12,6 @@ import {
     storeDepositVoucher,
     storeJettonTransfer,
 } from '../../wrappers/ChatPool';
-import { DistributorMaster } from '../../wrappers/DistributorMaster';
 import '@ton/test-utils';
 import { globalIdOf, signatureCell, signVoucher, TAG } from '../helpers/vouchers';
 
@@ -368,38 +367,9 @@ describe('ChatPool PoCs', () => {
         expect(yearsCovered).toBeLessThan(20);
     });
 
-    // CP-8: pool addresses carry no network id. Same owner (v4 wallets have
-    // network-independent addresses) + same backend key => identical master
-    // and pool addresses on two networks, so every voucher replays.
-    it('CP-8: vouchers signed for a "testnet" pool are valid on the "mainnet" pool', async () => {
-        const mk = async () => {
-            const b = await Blockchain.create();
-            const owner = await b.treasury('owner');
-            const creator = await b.treasury('creator');
-            const m = b.openContract(await DistributorMaster.fromInit(owner.address, pub(backend)));
-            await m.send(owner.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
-            await m.send(creator.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
-            return { b, m, creator, poolAddr: await m.getPoolAddress(CHAT_ID) };
-        };
-        const testnet = await mk();
-        const mainnet = await mk();
-        expect(testnet.m.address.equals(mainnet.m.address)).toBe(true);
-        expect(testnet.poolAddr.equals(mainnet.poolAddr)).toBe(true);
+    // CP-8 (X-2) is fixed: vouchers name their network. The regression test
+    // is tests/NetworkBinding.spec.ts.
 
-        // an admin voucher issued by the testnet backend...
-        const v = adminMsg(
-            backend,
-            testnet.poolAddr,
-            testnet.m.address,
-            testnet.creator.address,
-            globalIdOf(testnet.b),
-        );
-        // ...is accepted by the mainnet pool
-        const mp = mainnet.b.openContract(ChatPool.fromAddress(mainnet.poolAddr));
-        const r = await mp.send(mainnet.creator.getSender(), { value: toNano('0.05') }, v);
-        expect(r.transactions).toHaveTransaction({ to: mainnet.poolAddr, success: true });
-        expect((await mp.getPoolAdmin())!.equals(mainnet.creator.address)).toBe(true);
-    });
     // CP-9: the pool accepts deposits from ANY depositor once ANY admin is
     // set. An admin slot taken without the depositor's consent (leaked key /
     // CP-8 replay / stale admin after a Telegram ownership transfer) turns

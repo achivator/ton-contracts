@@ -284,40 +284,8 @@ describe('AchievementRegistry PoC', () => {
         expect(await registry.getTemplatesCount()).toEqual(5n);
     });
 
-    it('AR-4: same init on two networks => same address => a voucher signed for one network mints on the other', async () => {
-        // "testnet" and "mainnet" are two independent chains; the operator deploys
-        // with the same wallet, backend key and collection URL (the deploy script defaults).
-        const testnet = await Blockchain.create();
-        const tOwner = await testnet.treasury('owner');
-        const tMember = await testnet.treasury('member');
-        const tAdmin = await testnet.treasury('admin');
-        expect(tOwner.address.equals(owner.address)).toBe(true); // same mnemonic -> same wallet address
-        const tReg = await deployRegistry(testnet, tOwner.address);
-        await tReg.send(tOwner.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
-        expect(tReg.address.equals(registry.address)).toBe(true);
-
-        // mainnet: platform template 0 is "rare" achievement; testnet: whatever
-        await registry.send(
-            admin.getSender(),
-            { value: toNano('0.2') },
-            {
-                $$type: 'RegisterTemplate',
-                contentUrl: 'https://achivator.cc/mainnet-rare.json',
-                contentHash: 1n,
-                royalty: { $$type: 'RoyaltyParams', numerator: 5n, denominator: 100n, destination: admin.address },
-                ...regVoucher(admin.address, registry.address),
-            },
-        );
-
-        // a testnet mint voucher (testnet backend is lax / test data) for template 0
-        const testnetVoucher = mintMsg(tReg.address, 0n, member.address, 555n, 1n);
-        // ...replayed verbatim on mainnet
-        const res = await registry.send(member.getSender(), { value: toNano('0.2') }, testnetVoucher);
-        expect(res.transactions).toHaveTransaction({ from: member.address, to: registry.address, success: true });
-        expect(await registry.getIsMinted(0n, 555n)).toBe(true);
-        // and the mainnet nonce 1 is now burned for whoever the mainnet backend gives it to
-        expect(await registry.getIsNonceUsed(1n)).toBe(true);
-    });
+    // AR-4 (X-2) is fixed: vouchers name their network. The regression test
+    // is tests/NetworkBinding.spec.ts.
 
     it('AR-5: templateId is assigned at execution; registerTemplates.ts maps the pre-read count, so a front-run hijacks the mapping (100% royalty accepted)', async () => {
         // registerTemplates.ts: templateId = getTemplatesCount() BEFORE sending
