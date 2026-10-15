@@ -55,23 +55,8 @@ describe('TestJettonMinter PoC', () => {
         }
         console.log('get_wallet_data ->', walletErr);
         expect(walletErr).toEqual(11);
-        // provide_wallet_address (TEP-89, op 0x2c76b973) is not handled either -> 130
-        const r = await alice.send({
-            to: minter.address,
-            value: toNano('0.1'),
-            body: beginCell()
-                .storeUint(0x2c76b973, 32)
-                .storeUint(0, 64)
-                .storeAddress(alice.address)
-                .storeBit(false)
-                .endCell(),
-        });
-        expect(r.transactions).toHaveTransaction({
-            from: alice.address,
-            to: minter.address,
-            success: false,
-            exitCode: 130,
-        });
+        // (provide_wallet_address, TEP-89, is answered now: ChatPool registers
+        // its wallet that way, see tests/ChatPoolSecurity.spec.ts)
     });
 
     it('OK: get_wallet_address equals the actually deployed wallet and the sibling derivation', async () => {
@@ -193,10 +178,17 @@ describe('TestJettonMinter PoC', () => {
 
     it('TJM-6: Mint straight to a ChatPool credits its jetton wallet with no ledger entry; Excesses to pool fail with 130', async () => {
         const backend = keyPairFromSeed(Buffer.alloc(32, 7));
-        const pool = blockchain.openContract(
-            await ChatPool.fromInit(owner.address, 1n, BigInt('0x' + backend.publicKey.toString('hex'))),
+        // owner plays the master: InitPool deploys and initialises the pool
+        const pool = blockchain.openContract(await ChatPool.fromInit(owner.address, 1n));
+        await pool.send(
+            owner.getSender(),
+            { value: toNano('0.15') },
+            {
+                $$type: 'InitPool',
+                backendPubKey: BigInt('0x' + backend.publicKey.toString('hex')),
+                excessTo: owner.address,
+            },
         );
-        await pool.send(owner.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
         const r = await minter.send(
             owner.getSender(),
             { value: toNano('0.3') },
