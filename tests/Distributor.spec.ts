@@ -95,11 +95,16 @@ describe('Token Distribution', () => {
         jettonWallet = await blockchain.treasury('jettonWallet');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        pool = blockchain.openContract(await ChatPool.fromInit(master.address, CHAT_ID, pubKeyBigInt(backend)));
+        pool = blockchain.openContract(await ChatPool.fromInit(master.address, CHAT_ID));
 
-        const dep = await pool.send(deployer.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
+        // what DistributorMaster.CreatePool sends: the pool's StateInit + InitPool
+        const dep = await pool.send(
+            master.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'InitPool', backendPubKey: pubKeyBigInt(backend), excessTo: deployer.address },
+        );
         expect(dep.transactions).toHaveTransaction({
-            from: deployer.address,
+            from: master.address,
             to: pool.address,
             deploy: true,
             success: true,

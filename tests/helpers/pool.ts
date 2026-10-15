@@ -5,8 +5,15 @@
 // and a jetton is registered the TEP-89 way: the admin sends RegisterJetton,
 // the pool asks the jetton master (provide_wallet_address) and registers the
 // wallet from the master's take_wallet_address reply.
-import { Blockchain, BlockchainTransaction, SandboxContract, SendMessageResult, TreasuryContract } from '@ton/sandbox';
-import { Address, beginCell, Cell, toNano } from '@ton/core';
+import {
+    Blockchain,
+    BlockchainTransaction,
+    internal,
+    SandboxContract,
+    SendMessageResult,
+    TreasuryContract,
+} from '@ton/sandbox';
+import { Address, beginCell, Cell, ContractABI, toNano } from '@ton/core';
 import { KeyPair, keyPairFromSeed } from '@ton/crypto';
 import {
     ChatPool,
@@ -309,7 +316,7 @@ export function expectTx(res: SendMessageResult, match: Record<string, unknown>)
 }
 
 // Exit code of a require() message, from the contract's ABI.
-export function errorCode(contract: { abi: { errors?: Record<string, { message: string }> } }, message: string) {
+export function errorCode(contract: { abi: ContractABI }, message: string) {
     const hit = Object.entries(contract.abi.errors ?? {}).find(([, e]) => e.message === message);
     if (!hit) throw new Error(`no error "${message}" in the ABI`);
     return Number(hit[0]);
@@ -324,8 +331,26 @@ export async function storageUsed(bc: Blockchain, a: Address) {
     return { cells: Number(s.cells), bits: Number(s.bits) };
 }
 
-// Mainnet basechain storage prices (config param 18): bit_price_ps = 1,
-// cell_price_ps = 500, in 2^-16 nanoTON per second.
-export function rentPerYear(used: { cells: number; bits: number }): bigint {
-    return BigInt(Math.ceil(((used.bits * 1 + used.cells * 500) / 65536) * 365 * DAY));
+// Storage rent `address` pays for a year at the sandbox's prices (its config
+// is a mainnet snapshot, param 18), measured rather than computed: advance
+// the clock a year, poke the account with plain TON and read what its
+// storage phase collects. The blockchain is restored afterwards.
+export async function rentPerYear(bc: Blockchain, address: Address): Promise<bigint> {
+    const snapshot = bc.snapshot();
+    try {
+        const poker = await bc.treasury('rent-probe');
+        bc.now = (bc.now ?? Math.floor(Date.now() / 1000)) + 365 * DAY;
+        const res = await bc.sendMessage(
+            internal({ from: poker.address, to: address, value: toNano('0.01'), bounce: false }),
+        );
+        const tx = res.transactions.find((t) => t.inMessage?.info.dest?.toString() === address.toString())!;
+        const d = tx.description as {
+            type: string;
+            storagePhase?: { storageFeesCollected: bigint; storageFeesDue?: bigint };
+        };
+        if (d.type !== 'generic' || !d.storagePhase) throw new Error('no storage phase');
+        return d.storagePhase.storageFeesCollected + (d.storagePhase.storageFeesDue ?? 0n);
+    } finally {
+        await bc.loadFrom(snapshot);
+    }
 }

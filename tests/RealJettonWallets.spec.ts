@@ -48,10 +48,17 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
         jettonMaster = await blockchain.treasury('jetton-master');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        pool = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID, BigInt('0x' + backend.publicKey.toString('hex'))),
+        pool = blockchain.openContract(await ChatPool.fromInit(master.address, CHAT_ID));
+        // what DistributorMaster.CreatePool sends: the pool's StateInit + InitPool
+        await pool.send(
+            master.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'InitPool',
+                backendPubKey: BigInt('0x' + backend.publicKey.toString('hex')),
+                excessTo: admin.address,
+            },
         );
-        await pool.send(admin.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
 
         const voucher = beginCell()
             .store(

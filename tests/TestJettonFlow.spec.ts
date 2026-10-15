@@ -33,16 +33,7 @@ describe('TestJetton flow', () => {
         master = await blockchain.treasury('master');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        pool = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID, BigInt('0x' + backend.publicKey.toString('hex'))),
-        );
-        const depPool = await pool.send(admin.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
-        expect(depPool.transactions).toHaveTransaction({
-            from: admin.address,
-            to: pool.address,
-            deploy: true,
-            success: true,
-        });
+        pool = await deployPool(CHAT_ID);
 
         const content = beginCell().storeUint(0, 8).storeStringTail('test').endCell();
         minter = blockchain.openContract(await TestJettonMinter.fromInit(admin.address, content));
@@ -64,6 +55,28 @@ describe('TestJetton flow', () => {
         );
         expect(mintRes.transactions).toHaveTransaction({ to: minter.address, success: true });
     });
+
+    // What DistributorMaster.CreatePool sends (a treasury plays the master):
+    // the pool's StateInit with InitPool.
+    async function deployPool(chatId: bigint): Promise<SandboxContract<ChatPool>> {
+        const p = blockchain.openContract(await ChatPool.fromInit(master.address, chatId));
+        const res = await p.send(
+            master.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'InitPool',
+                backendPubKey: BigInt('0x' + backend.publicKey.toString('hex')),
+                excessTo: admin.address,
+            },
+        );
+        expect(res.transactions).toHaveTransaction({
+            from: master.address,
+            to: p.address,
+            deploy: true,
+            success: true,
+        });
+        return p;
+    }
 
     async function setAdmin(
         target: SandboxContract<ChatPool>,
@@ -252,11 +265,7 @@ describe('TestJetton flow', () => {
             { $$type: 'Mint', amount: toNano('500'), recipient: adminB.address },
         );
 
-        const poolB = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID_B, BigInt('0x' + backend.publicKey.toString('hex'))),
-        );
-        const depB = await poolB.send(admin.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
-        expect(depB.transactions).toHaveTransaction({ to: poolB.address, deploy: true, success: true });
+        const poolB = await deployPool(CHAT_ID_B);
 
         async function depositTo(
             pool: SandboxContract<ChatPool>,

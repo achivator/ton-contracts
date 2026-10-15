@@ -19,7 +19,6 @@ import {
     rentPerYear,
     setAdminMsg,
     setupPool,
-    storageUsed,
     T0,
     tonBalance,
 } from './helpers/pool';
@@ -106,9 +105,7 @@ describe('DistributorMaster security regressions', () => {
             success: false,
             exitCode: errorCode(rogue, 'only the master initialises the pool'),
         });
-        // every message but the master's InitPool throws, so the deploy never lands
-        const state = async () => (await bc.getContract(rogue.address)).accountState?.type;
-        expect(await state()).not.toBe('active');
+        expect(await rogue.getIsInitialized()).toBe(false);
 
         // with an old-key voucher: refused too (not initialised)
         const env = { bc, globalId: globalIdOf(bc), master, pool: rogue } as unknown as PoolEnv;
@@ -122,7 +119,9 @@ describe('DistributorMaster security regressions', () => {
             success: false,
             exitCode: errorCode(rogue, 'pool is not initialised'),
         });
-        expect(await state()).not.toBe('active');
+        const topUp = await attacker.send({ to: rogue.address, value: toNano('0.05') });
+        expectTx(topUp, { to: rogue.address, success: false, exitCode: errorCode(rogue, 'pool is not initialised') });
+        expect(await rogue.getIsInitialized()).toBe(false);
 
         // the master initialises it with the current key; old-key vouchers are dead
         await master.send(attacker.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: OTHER_CHAT });
@@ -261,7 +260,7 @@ describe('DistributorMaster security regressions', () => {
         );
         expect(await tonBalance(bc, master.address)).toBeGreaterThanOrEqual(afterDeploy - toNano('0.001'));
 
-        const perYear = rentPerYear(await storageUsed(bc, master.address));
+        const perYear = await rentPerYear(bc, master.address);
         const years = Number(reserve) / Number(perYear);
         console.log(
             `DM-5: master rent ${(Number(perYear) / 1e9).toFixed(5)} TON/yr; the reserve covers ${years.toFixed(1)} years`,

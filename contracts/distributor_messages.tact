@@ -127,6 +127,24 @@ message RotateBackendKey {
     backendPubKey: Int as uint256;   // affects pools created afterwards
 }
 
+// Master -> pool, with the pool's StateInit: sets the backend key of a new
+// pool (its address depends on (master, chatId) only, so it survives key
+// rotation). Accepted only from the master, and only once; a repeated
+// CreatePool hands the value back to excessTo.
+message InitPool {
+    backendPubKey: Int as uint256;
+    excessTo: Address;               // whoever paid for the CreatePool
+}
+
+// Two-step ownership transfer of the master: the owner proposes (null
+// withdraws a proposal), the proposed wallet accepts.
+message ProposeOwner {
+    newOwner: Address?;
+}
+
+message AcceptOwnership {
+}
+
 // TEP-74 excess notification: carries TON back to whoever overpaid.
 message(0xd53276db) TonExcesses {
     queryId: Int as uint64;

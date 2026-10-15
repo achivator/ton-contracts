@@ -1,4 +1,3 @@
-import "@stdlib/deploy";
 import "./distributor_messages.tact";
 
 // Minimum TON the caller must attach so the outbound jetton transfer cannot
@@ -25,10 +24,20 @@ const QueryWithdrawTracked: Int = 0x8000000000000001;   // fully covered by the 
 const QueryWithdrawUntracked: Int = 0x8000000000000002; // exceeded the ledger
 const QueryRefund: Int = 0x8000000000000003;            // returned a rejected deposit
 
-contract ChatPool with Deployable {
+// A pool's address is derived from (master, chatId) alone. The master deploys
+// it with InitPool, which sets the backend key; until then the pool refuses
+// every message (a jetton notification is refunded instead). So nobody but
+// the master can bring a pool to life at the official address, and a backend
+// key rotation never moves it (DM-2, DM-3).
+//
+// Anyone may create a pool for any chatId through the master (DM-9): that is
+// harmless, since the pool is useless until the backend-verified chat creator
+// claims its admin slot, and the creator pays the deploy.
+contract ChatPool {
     master: Address;
     chatId: Int as int64;
-    backendPubKey: Int as uint256;
+    initialized: Bool = false;             // set once, by the master's InitPool
+    backendPubKey: Int as uint256 = 0;
 
     admin: Address?;                       // set via backend-signed SetAdmin (init/rotation)
     balances: map<Address, Int>;           // jettonMaster -> credited amount (ledger)
@@ -43,14 +52,35 @@ contract ChatPool with Deployable {
     dayBudgets: map<Address, Int>;         // budget fixed at the day's first claim
     daySpent: map<Address, Int>;           // claimed so far that day
 
-    init(master: Address, chatId: Int, backendPubKey: Int) {
+    init(master: Address, chatId: Int) {
         self.master = master;
         self.chatId = chatId;
-        self.backendPubKey = backendPubKey;
     }
 
-    // Plain TON: the master's deploy message and storage top-ups.
-    receive() {}
+    // The master's deploy message. A repeated CreatePool reaches an already
+    // initialised pool: its value goes back to whoever paid for it.
+    receive(msg: InitPool) {
+        require(sender() == self.master, "only the master initialises the pool");
+        if (self.initialized) {
+            send(SendParameters{
+                to: msg.excessTo,
+                value: 0,
+                mode: SendRemainingValue + SendIgnoreErrors,
+                bounce: false,
+                body: TonExcesses{queryId: 0}.toCell()
+            });
+            return;
+        }
+        require(msg.backendPubKey != 0, "invalid backend key");
+        self.initialized = true;
+        self.backendPubKey = msg.backendPubKey;
+        // the deploy value stays: it is the pool's storage reserve
+    }
+
+    // Plain TON: storage top-ups.
+    receive() {
+        self.requireInitialized();
+    }
 
     // ---- Deposit: jettons land on the pool's jetton wallet ----
     // Accepted forwardPayload shapes:
@@ -126,6 +156,7 @@ contract ChatPool with Deployable {
     // Rotation (slot taken): only the current admin may hand over, so a leaked
     // backend key can never hijack an established pool. ----
     receive(msg: SetAdmin) {
+        self.requireInitialized();
         require(checkSignature(signedVoucherHash(VoucherTagAdmin, myAddress(), msg.voucherCell), msg.signature, self.backendPubKey),
             "bad admin voucher signature");
 
@@ -152,6 +183,7 @@ contract ChatPool with Deployable {
 
     // ---- Claim: backend-signed voucher, recipient pays the gas ----
     receive(msg: Claim) {
+        self.requireInitialized();
         require(checkSignature(signedVoucherHash(VoucherTagClaim, myAddress(), msg.voucherCell), msg.signature, self.backendPubKey),
             "bad claim voucher signature");
 
@@ -311,6 +343,11 @@ contract ChatPool with Deployable {
         });
     }
 
+    fun requireInitialized() {
+        require(self.initialized, "pool is not initialised");
+    }
+
+    // An admin exists only in an initialised pool.
     fun requireAdmin() {
         let admin: Address? = self.admin;
         require(admin != null, "only chat admin");
@@ -418,6 +455,10 @@ contract ChatPool with Deployable {
 
     get fun backendKey(): Int {
         return self.backendPubKey;
+    }
+
+    get fun isInitialized(): Bool {
+        return self.initialized;
     }
 
     get fun version(): Int {

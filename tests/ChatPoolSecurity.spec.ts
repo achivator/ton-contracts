@@ -628,21 +628,33 @@ describe('ChatPool security regressions', () => {
             );
             await claim(env, { jettonMaster: jm.address, amount: 1n, nonce: 1n });
             const s0 = await storageUsed(env.bc, env.pool.address);
+            const r0 = await rentPerYear(env.bc, env.pool.address);
             const N = 100;
             for (let n = 2; n < 2 + N; n++) {
                 await claim(env, { jettonMaster: jm.address, amount: 1n, nonce: BigInt(n) });
             }
             const s1 = await storageUsed(env.bc, env.pool.address);
-            const perEntry = rentPerYear({ cells: (s1.cells - s0.cells) / N, bits: (s1.bits - s0.bits) / N });
+            const perEntry = Number((await rentPerYear(env.bc, env.pool.address)) - r0) / N;
             const fee = toNano('0.002'); // PoolClaimStorageFee
-            const years = Number(fee) / Number(perEntry);
+            const years = Number(fee) / perEntry;
             console.log(
                 `CP-7: nonce entry ${((s1.cells - s0.cells) / N).toFixed(2)} cells, ${((s1.bits - s0.bits) / N).toFixed(0)} bits, ` +
-                    `${(Number(perEntry) / 1e9).toFixed(6)} TON/yr; the fee covers ${years.toFixed(1)} years`,
+                    `${(perEntry / 1e9).toFixed(7)} TON/yr; the fee covers ${years.toFixed(0)} years`,
             );
             // an entry lives about 3 days while the pool is in use; if the pool
             // falls idle its last entries stay, and their own fees pay for them
-            expect(years).toBeGreaterThanOrEqual(5);
+            expect(years).toBeGreaterThanOrEqual(20);
+        });
+
+        it('keeps a TON reserve that pays the pool state for at least 10 years', async () => {
+            await funded(toNano('1000'));
+            const perYear = await rentPerYear(env.bc, env.pool.address);
+            const reserve = toNano('0.1'); // PoolMinTonReserve
+            const years = Number(reserve) / Number(perYear);
+            console.log(
+                `pool rent ${(Number(perYear) / 1e9).toFixed(5)} TON/yr; the reserve covers ${years.toFixed(1)} years`,
+            );
+            expect(years).toBeGreaterThanOrEqual(10);
         });
     });
 
