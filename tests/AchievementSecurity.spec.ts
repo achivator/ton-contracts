@@ -771,7 +771,10 @@ describe('Achievement SBT security regressions', () => {
         ];
         for (const [what, address, years] of cases) {
             const held = await balance(address);
-            const { cells } = await accountCells(bc, address);
+            const { cells, bits } = await accountCells(bc, address);
+            // what the same account would pay under the pre-2026 prices (1 per
+            // bit, 500 per cell): for the record, not asserted
+            const oldRent = ((bits * 1n + cells * 500n) * BigInt(YEAR)) / 65536n;
             bc.now = now + years * YEAR;
             // a bounceable message: storage is charged before its value is credited
             const res = await stranger.send({
@@ -785,7 +788,8 @@ describe('Achievement SBT security regressions', () => {
             const rent: bigint = d.storagePhase.storageFeesCollected;
             console.log(
                 `${what}: ${cells} cells, holds ${Number(held) / 1e9} TON, rent ${Number(rent) / 1e9 / years} TON/year, ` +
-                    `covers ${(Number(held) / Number(rent)) * years} years`,
+                    `covers ${(Number(held) / Number(rent)) * years} years ` +
+                    `(${Number(held) / Number(oldRent)} years at the pre-2026 prices)`,
             );
             expect(rent).toBeGreaterThan(0n);
             expect(d.storagePhase.storageFeesDue ?? 0n).toEqual(0n);
