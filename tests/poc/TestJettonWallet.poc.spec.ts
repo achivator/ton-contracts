@@ -6,7 +6,7 @@ import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox';
 import { Address, beginCell, Cell, toNano } from '@ton/core';
 import { keyPairFromSeed, KeyPair } from '@ton/crypto';
 import { TestJettonMinter, TestJettonWallet } from '../../wrappers/TestJetton';
-import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher } from '../../wrappers/ChatPool';
+import { ChatPool, storeAdminInitVoucher, storeDepositVoucher } from '../../wrappers/ChatPool';
 import '@ton/test-utils';
 import { globalIdOf, signatureCell, signVoucher, TAG } from '../helpers/vouchers';
 
@@ -126,31 +126,34 @@ describe('TestJettonWallet PoC', () => {
     });
 
     // ---------------------------------------------------------------- shared ChatPool setup
-    async function setupPool(): Promise<{
-        pool: SandboxContract<ChatPool>;
-        backend: KeyPair;
-        admin: SandboxContract<TreasuryContract>;
-    }> {
+    // A pool initialised as the master does it, with alice as its admin and
+    // the test jetton registered (TEP-89): alice's deposits are credited.
+    async function setupPool(): Promise<{ pool: SandboxContract<ChatPool>; backend: KeyPair }> {
         const master = await blockchain.treasury('distributor-master');
-        const admin = await blockchain.treasury('pool-admin');
         const backend = keyPairFromSeed(Buffer.alloc(32, 7));
-        const pool = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID, BigInt('0x' + backend.publicKey.toString('hex'))),
+        const pool = blockchain.openContract(await ChatPool.fromInit(master.address, CHAT_ID));
+        await pool.send(
+            master.getSender(),
+            { value: toNano('0.15') },
+            {
+                $$type: 'InitPool',
+                backendPubKey: BigInt('0x' + backend.publicKey.toString('hex')),
+                excessTo: master.address,
+            },
         );
-        await pool.send(admin.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
         const voucher = beginCell()
             .store(
                 storeAdminInitVoucher({
                     $$type: 'AdminInitVoucher',
                     chatId: CHAT_ID,
                     master: master.address,
-                    admin: admin.address,
+                    admin: alice.address,
                     expiry: farFuture(),
                 }),
             )
             .endCell();
         await pool.send(
-            admin.getSender(),
+            alice.getSender(),
             { value: toNano('0.05') },
             {
                 $$type: 'SetAdmin',
@@ -160,52 +163,24 @@ describe('TestJettonWallet PoC', () => {
                 ),
             },
         );
-        expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
-        return { pool, backend, admin };
+        expect((await pool.getPoolAdmin())!.equals(alice.address)).toBe(true);
+        await pool.send(
+            alice.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster: minter.address },
+        );
+        expect(await pool.getJettonWallet(minter.address)).not.toBeNull();
+        return { pool, backend };
     }
 
-    function depositPayloadCell(backend: KeyPair, pool: Address, jettonMaster: Address, poolWallet: Address): Cell {
+    function depositPayloadCell(backend: KeyPair, pool: Address, jettonMaster: Address): Cell {
         const voucher = beginCell()
             .store(
-                storeDepositVoucher({
-                    $$type: 'DepositVoucher',
-                    chatId: CHAT_ID,
-                    jettonMaster,
-                    expectedJettonWallet: poolWallet,
-                    expiry: farFuture(),
-                }),
+                storeDepositVoucher({ $$type: 'DepositVoucher', chatId: CHAT_ID, jettonMaster, expiry: farFuture() }),
             )
             .endCell();
         const sig = signVoucher(voucher, backend, TAG.Deposit, pool, globalIdOf(blockchain));
         return beginCell().storeRef(voucher).storeBuffer(sig).endCell();
-    }
-
-    function claimMsg(
-        backend: KeyPair,
-        pool: Address,
-        recipient: Address,
-        jettonMaster: Address,
-        amount: bigint,
-        nonce: bigint,
-    ) {
-        const voucher = beginCell()
-            .store(
-                storeClaimVoucher({
-                    $$type: 'ClaimVoucher',
-                    chatId: CHAT_ID,
-                    recipient,
-                    jettonMaster,
-                    amount,
-                    nonce,
-                    expiry: farFuture(),
-                }),
-            )
-            .endCell();
-        return {
-            $$type: 'Claim' as const,
-            voucherCell: voucher,
-            signature: signatureCell(signVoucher(voucher, backend, TAG.Claim, pool, globalIdOf(blockchain))),
-        };
     }
 
     // ---------------------------------------------------------------- TJW-3
@@ -227,7 +202,7 @@ describe('TestJettonWallet PoC', () => {
                 forwardTonAmount: toNano('0.15'),
                 forwardPayload: beginCell()
                     .storeUint(1, 1)
-                    .storeRef(depositPayloadCell(backend, pool.address, minter.address, poolWallet.address))
+                    .storeRef(depositPayloadCell(backend, pool.address, minter.address))
                     .endCell(),
             },
         );

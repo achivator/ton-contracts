@@ -6,14 +6,13 @@ import {
     storeAdminInitVoucher,
     storeClaim,
     storeClaimVoucher,
-    storeDepositVoucher,
     storeJettonTransfer,
     storeJettonTransferNotification,
     storeSetAdmin,
 } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
-import { TAG } from '../wrappers/Vouchers';
-import { voucherSignerFor } from './network';
+import { depositVoucherCell, TAG } from '../wrappers/Vouchers';
+import { contractVersion, voucherSignerFor } from './network';
 import { confirmSend, jettonWalletOf, lastTxLt, sleep } from './actors';
 import { reqEnv } from './env';
 
@@ -157,17 +156,12 @@ export async function run(provider: NetworkProvider) {
         }
         case 'fake_notify': {
             const amount = toNano(reqEnv('AMOUNT'));
-            const voucher = beginCell()
-                .store(
-                    storeDepositVoucher({
-                        $$type: 'DepositVoucher',
-                        chatId,
-                        jettonMaster,
-                        expectedJettonWallet: poolJw,
-                        expiry,
-                    }),
-                )
-                .endCell();
+            const voucher = depositVoucherCell(await contractVersion(provider, poolAddr), {
+                chatId,
+                jettonMaster,
+                expectedJettonWallet: poolJw,
+                expiry,
+            });
             const signature = signFor(voucher, kp, TAG.Deposit);
             const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
             const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();

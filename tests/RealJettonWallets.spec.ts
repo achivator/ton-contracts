@@ -5,6 +5,7 @@ import { flattenTransaction } from '@ton/test-utils';
 import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher } from '../wrappers/ChatPool';
 import '@ton/test-utils';
 import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { provideWalletQuery, takeWalletAddressBody } from './helpers/tep89';
 import {
     mintToRealWallet,
     REAL_JETTON_WALLETS,
@@ -20,8 +21,11 @@ import {
 const CHAT_ID = 1001234567890n;
 const JETTON_TRANSFER_OP = 0x0f8a7ea5;
 // chat_pool.tact: PoolMinClaimValue + PoolClaimStorageFee, PoolMinWithdrawValue
-const MIN_CLAIM_VALUE = toNano('0.05') + toNano('0.002');
-const MIN_WITHDRAW_VALUE = toNano('0.05');
+const MIN_CLAIM_VALUE = toNano('0.08') + toNano('0.002');
+const MIN_WITHDRAW_VALUE = toNano('0.08');
+// Headroom a minimum-value claim must leave over what the wallet itself
+// needs, so a gas price rise or a heavier wallet does not bounce claims.
+const CLAIM_GAS_MARGIN = toNano('0.02');
 
 describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
     let blockchain: Blockchain;
@@ -45,10 +49,17 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
         jettonMaster = await blockchain.treasury('jetton-master');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        pool = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID, BigInt('0x' + backend.publicKey.toString('hex'))),
+        pool = blockchain.openContract(await ChatPool.fromInit(master.address, CHAT_ID));
+        // what DistributorMaster.CreatePool sends: the pool's StateInit + InitPool
+        await pool.send(
+            master.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'InitPool',
+                backendPubKey: BigInt('0x' + backend.publicKey.toString('hex')),
+                excessTo: admin.address,
+            },
         );
-        await pool.send(admin.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
 
         const voucher = beginCell()
             .store(
@@ -75,6 +86,20 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
 
         poolWallet = realWalletAddress(realWallet, pool.address, jettonMaster.address);
+        // RegisterJetton: the treasury playing the jetton master answers the
+        // pool's TEP-89 request with the pool's real wallet address
+        const req = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster: jettonMaster.address },
+        );
+        const q = provideWalletQuery(req, pool.address, jettonMaster.address)!;
+        await jettonMaster.send({
+            to: pool.address,
+            value: toNano('0.05'),
+            body: takeWalletAddressBody(q.queryId, poolWallet),
+        });
+        expect((await pool.getJettonWallet(jettonMaster.address))!.equals(poolWallet)).toBe(true);
         adminWallet = realWalletAddress(realWallet, admin.address, jettonMaster.address);
         userWallet = realWalletAddress(realWallet, user.address, jettonMaster.address);
 
@@ -97,7 +122,6 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster: jettonMaster.address,
-                    expectedJettonWallet: poolWallet,
                     expiry: farFuture,
                 }),
             )
@@ -183,6 +207,63 @@ describe.each(REAL_JETTON_WALLETS)('ChatPool with the $name', (realWallet) => {
         expect(await realWalletBalance(blockchain, userWallet)).toEqual(toNano('10'));
         expect(await pool.getBalanceOf(jettonMaster.address)).toEqual(toNano('90'));
         expect(await pool.getIsNonceUsed(1n)).toBe(true);
+    });
+
+    // The least TON a JettonTransfer to this wallet must carry so that it
+    // reaches a fresh recipient wallet (the worst case: it deploys it).
+    async function walletTransferFloor(): Promise<bigint> {
+        const sender = await blockchain.treasury('floor-probe');
+        await mintToRealWallet({ wallet: realWallet, jettonMaster, owner: sender.address, amount: toNano('10') });
+        const senderWallet = realWalletAddress(realWallet, sender.address, jettonMaster.address);
+        const snapshot = blockchain.snapshot();
+        const delivers = async (value: bigint) => {
+            await blockchain.loadFrom(snapshot);
+            const to = await blockchain.treasury('floor-recipient');
+            const body = beginCell()
+                .storeUint(JETTON_TRANSFER_OP, 32)
+                .storeUint(0, 64)
+                .storeCoins(1n)
+                .storeAddress(to.address)
+                .storeAddress(sender.address)
+                .storeMaybeRef(null)
+                .storeCoins(0)
+                .storeUint(0, 1)
+                .endCell();
+            const res = await sender.send({ to: senderWallet, value, body });
+            const target = realWalletAddress(realWallet, to.address, jettonMaster.address);
+            return res.transactions.some(
+                (t) => flattenTransaction(t).to?.equals(target) && flattenTransaction(t).success,
+            );
+        };
+        let lo = 0n;
+        let hi = toNano('0.2');
+        expect(await delivers(hi)).toBe(true);
+        while (hi - lo > toNano('0.0005')) {
+            const mid = (lo + hi) / 2n;
+            if (await delivers(mid)) hi = mid;
+            else lo = mid;
+        }
+        await blockchain.loadFrom(snapshot);
+        return hi;
+    }
+
+    it('keeps a comfortable gas margin at the minimum claim value', async () => {
+        await deposit(toNano('100'));
+        const floor = await walletTransferFloor();
+
+        // below the minimum the pool refuses the claim outright
+        const under = await pool.send(user.getSender(), { value: MIN_CLAIM_VALUE - 1n }, claim(toNano('10'), 1n));
+        expect(under.transactions).toHaveTransaction({ to: pool.address, success: false });
+
+        const res = await pool.send(user.getSender(), { value: MIN_CLAIM_VALUE }, claim(toNano('10'), 1n));
+        expectDelivered(res, userWallet);
+        const forwarded = res.transactions
+            .map(flattenTransaction)
+            .find((t) => t.from?.equals(pool.address) && t.to?.equals(poolWallet))!.value!;
+        console.log(
+            `${realWallet.name}: a minimum-value claim forwards ${Number(forwarded) / 1e9} TON, the wallet needs ${Number(floor) / 1e9} TON`,
+        );
+        expect(forwarded - floor).toBeGreaterThanOrEqual(CLAIM_GAS_MARGIN);
     });
 
     it('delivers a WithdrawRemainder to the admin', async () => {

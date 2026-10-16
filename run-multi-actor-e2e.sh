@@ -292,7 +292,13 @@ BP_LOG=$TMP/bp-attack-setAdmin_badSig.log bp attack "WALLET_MNEMONIC=$ATTACKER_M
 # Legit inits: the named wallet claims its own slot.
 bp setAdmin "WALLET_MNEMONIC=$ADMIN1_MN" "MASTER_ADDRESS=$MASTER" "CHAT_ID=$CHAT1"
 bp setAdmin "WALLET_MNEMONIC=$ADMIN2_MN" "MASTER_ADDRESS=$MASTER" "CHAT_ID=$CHAT2"
-say "phase 2b: deposits (pool1 by ADMIN1, pool2 by ADMIN2) and daily claim budgets"
+say "phase 2b: jetton registration (TEP-89), deposits (pool1 by ADMIN1, pool2 by ADMIN2) and daily claim budgets"
+# A v3 pool credits only jettons from the wallet it registered by asking the
+# jetton master, and only from its admin.
+bp poolControl "WALLET_MNEMONIC=$ADMIN1_MN" "MASTER_ADDRESS=$MASTER" "CHAT_ID=$CHAT1" \
+    MODE=register "JETTON_MASTER=$JM"
+bp poolControl "WALLET_MNEMONIC=$ADMIN2_MN" "MASTER_ADDRESS=$MASTER" "CHAT_ID=$CHAT2" \
+    MODE=register "JETTON_MASTER=$JM"
 bp deposit "WALLET_MNEMONIC=$ADMIN1_MN" "MASTER_ADDRESS=$MASTER" "JETTON_MASTER=$JM" \
     "CHAT_ID=$CHAT1" "AMOUNT=$DEPOSIT1"
 bp deposit "WALLET_MNEMONIC=$ADMIN2_MN" "MASTER_ADDRESS=$MASTER" "JETTON_MASTER=$JM" \

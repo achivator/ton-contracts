@@ -20,11 +20,16 @@ export function networkGlobalId(provider: NetworkProvider): number {
 
 export type VoucherSigner = (voucher: Cell, kp: KeyPair, tag: bigint) => Buffer;
 
+// Protocol version an Achivator contract reports (its version() getter).
+export async function contractVersion(provider: NetworkProvider, target: Address): Promise<number> {
+    return (await provider.provider(target).get('version', [])).stack.readNumber();
+}
+
 // Signs vouchers for `target` in the envelope its version() getter asks for:
 // network-bound for protocol v3, the legacy network-less one for v2 (pools of
 // a v2 master keep it for good).
 export async function voucherSignerFor(provider: NetworkProvider, target: Address): Promise<VoucherSigner> {
-    const version = (await provider.provider(target).get('version', [])).stack.readNumber();
+    const version = await contractVersion(provider, target);
     if (version === 3) {
         const globalId = networkGlobalId(provider);
         return (voucher, kp, tag) => signVoucher(voucher, kp, tag, target, globalId);

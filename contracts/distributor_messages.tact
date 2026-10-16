@@ -35,6 +35,21 @@ message(0x7362d09c) JettonTransferNotification {
     forwardPayload: Slice as remaining;
 }
 
+// ---- Jetton wallet discovery (TEP-89) ----
+// ChatPool asks a jetton master for its own wallet and trusts only the
+// master's answer, never a voucher or a notification (CP-1).
+message(0x2c76b973) ProvideWalletAddress {
+    queryId: Int as uint64;
+    ownerAddress: Address;
+    includeAddress: Bool;
+}
+
+message(0xd1735400) TakeWalletAddress {
+    queryId: Int as uint64;
+    walletAddress: Address?;     // addr_none when the master cannot tell
+    ownerAddress: Cell?;         // Maybe ^MsgAddress, only if asked for
+}
+
 // ---- Wire structs (documentation of the signed-cell layout) ----
 //
 // These mirror exactly the cells the backend serialises and signs, and the
@@ -47,13 +62,17 @@ message(0x7362d09c) JettonTransferNotification {
 const VoucherTagDeposit: Int = 0x44455032;   // "DEP2", target = pool (DEP1 carried a fee)
 const VoucherTagClaim: Int = 0x434c4d31;     // "CLM1", target = pool
 const VoucherTagAdmin: Int = 0x41444d31;     // "ADM1", target = pool
+const VoucherTagAdminProposal: Int = 0x41505231; // "APR1", target = pool
 
 // Carried (as a ref) inside JettonTransferNotification.forwardPayload,
-// followed by a 512-bit ed25519 signature (see SignedVoucher).
+// followed by a 512-bit ed25519 signature (see SignedVoucher). Protocol v3
+// names no wallet: the pool credits only jettons that arrive from the
+// wallet it registered for jettonMaster (RegisterJetton, TEP-89), and only
+// when the depositor is the pool admin. (v2 pools still take the v2 layout
+// with an expectedJettonWallet after jettonMaster.)
 struct DepositVoucher {
     chatId: Int as int64;
     jettonMaster: Address;
-    expectedJettonWallet: Address;   // the pool's own jetton wallet (backend-derived)
     expiry: Int as uint64;
 }
 
@@ -78,12 +97,54 @@ struct AdminInitVoucher {
     expiry: Int as uint64;
 }
 
+// Admin recovery voucher (CP-12): the backend signs it only after verifying
+// (via Telegram initData + Bot API) that the requester is a current chat
+// administrator or the creator, for a pool whose admin wallet is lost or no
+// longer theirs. Submitted by the named wallet itself (ProposeAdmin), it
+// starts a 7-day timelock that the current admin can cancel. seq must equal
+// the pool's adminProposalSeq(), which every cancel and execute bumps, so a
+// voucher can start at most one proposal.
+struct AdminProposalVoucher {
+    chatId: Int as int64;
+    newAdmin: Address;
+    seq: Int as uint32;
+    expiry: Int as uint64;
+}
+
 // ---- ChatPool messages ----
-// admin-only, NEVER requires the backend
+// Admin-only, none of them needs the backend.
+
+// Moves tracked jettons out: at most what the ledger holds for the jetton.
 message WithdrawRemainder {
     jettonMaster: Address;
     amount: Int as coins;
     to: Address;
+}
+
+// Registers the pool's wallet of a jetton: the pool asks the jetton master
+// (TEP-89 provide_wallet_address) and registers the wallet from its
+// take_wallet_address reply. Needed before the first deposit of a jetton,
+// and enough to sweep jettons that reached an unregistered wallet.
+message RegisterJetton {
+    jettonMaster: Address;
+}
+
+// Moves jettons the ledger does not track (strays, kept underfunded
+// deposits) out of a registered wallet. The ledger never changes, not even
+// on a bounce. Sweeping more than the untracked surplus takes tracked
+// jettons with it: the ledger then overstates the wallet and claims for the
+// difference bounce, which only the admin can cause, and only to its pool.
+message SweepUntracked {
+    jettonMaster: Address;
+    amount: Int as coins;
+    to: Address;
+}
+
+// Moves the pool's own TON out (claim storage fees, top-ups), never below
+// PoolMinTonReserve.
+message WithdrawTon {
+    to: Address;
+    amount: Int as coins;
 }
 
 // ---- Admin-only safety controls. They limit what a leaked backend key can
@@ -111,8 +172,22 @@ message Claim {
     signature: Slice as remaining;   // 512-bit ed25519 signature, see SignedVoucher
 }
 
+// Admin recovery, see AdminProposalVoucher. Anyone may execute a proposal
+// once its timelock is over; only the current admin may cancel it.
+message ProposeAdmin {
+    voucherCell: Cell;               // serialised AdminProposalVoucher
+    signature: Slice as remaining;   // 512-bit ed25519 signature, see SignedVoucher
+}
+
+message CancelAdminProposal {
+}
+
+message ExecuteAdminProposal {
+}
+
 // Init or rotate the pool admin. Init: the wallet named in the voucher sends
-// this itself. Rotation: the current admin sends it, naming the successor.
+// this itself. Rotation: the current admin sends it, naming the successor;
+// it takes effect at once.
 message SetAdmin {
     voucherCell: Cell;               // serialised AdminInitVoucher
     signature: Slice as remaining;   // 512-bit ed25519 signature, see SignedVoucher
@@ -125,6 +200,24 @@ message CreatePool {
 
 message RotateBackendKey {
     backendPubKey: Int as uint256;   // affects pools created afterwards
+}
+
+// Master -> pool, with the pool's StateInit: sets the backend key of a new
+// pool (its address depends on (master, chatId) only, so it survives key
+// rotation). Accepted only from the master, and only once; a repeated
+// CreatePool hands the value back to excessTo.
+message InitPool {
+    backendPubKey: Int as uint256;
+    excessTo: Address;               // whoever paid for the CreatePool
+}
+
+// Two-step ownership transfer of the master: the owner proposes (null
+// withdraws a proposal), the proposed wallet accepts.
+message ProposeOwner {
+    newOwner: Address?;
+}
+
+message AcceptOwnership {
 }
 
 // TEP-74 excess notification: carries TON back to whoever overpaid.

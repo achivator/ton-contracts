@@ -66,7 +66,26 @@ contract TestJettonMinter with Deployable, Ownable {
         self.totalSupply = self.totalSupply + msg.amount;
     }
 
-    // TEP-89: the jetton wallet address of an owner.
+    // TEP-89 discovery: ChatPool registers its wallet from this answer.
+    receive(msg: ProvideWalletAddress) {
+        let owner: Cell? = null;
+        if (msg.includeAddress) {
+            owner = beginCell().storeAddress(msg.ownerAddress).endCell();
+        }
+        send(SendParameters{
+            to: sender(),
+            value: 0,
+            mode: SendRemainingValue,
+            bounce: false,
+            body: TakeWalletAddress{
+                queryId: msg.queryId,
+                walletAddress: contractAddress(self.walletInit(msg.ownerAddress)),
+                ownerAddress: owner
+            }.toCell()
+        });
+    }
+
+    // TEP-74 getter: the jetton wallet address of an owner.
     get fun get_wallet_address(owner: Address): Address {
         return contractAddress(self.walletInit(owner));
     }
