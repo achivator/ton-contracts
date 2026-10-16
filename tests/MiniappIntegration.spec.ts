@@ -96,6 +96,7 @@ describe('miniapp lib <-> contracts', () => {
         await minter.send(owner.getSender(), { value: toNano('0.05') }, { $$type: 'Deploy', queryId: 0n });
         const mintRes = await minter.send(owner.getSender(), { value: toNano('0.2') }, {
             $$type: 'Mint',
+            queryId: 0n,
             amount: toNano('1000'),
             recipient: creator.address,
         });
