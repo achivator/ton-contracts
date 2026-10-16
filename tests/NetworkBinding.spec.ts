@@ -24,11 +24,11 @@ import { NetworkProvider } from '@ton/blueprint';
 import { networkGlobalId, refuseKeySharedWithOtherNetwork, voucherSignerFor } from '../scripts/network';
 import { GLOBAL_ID, signLegacyVoucher } from '../wrappers/Vouchers';
 import { globalIdOf, setGlobalId, signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { provideWalletQuery, takeWalletAddressBody } from './helpers/tep89';
 
 const MAINNET = -239;
 const TESTNET = -3;
 const CHAT_ID = -1001234567890n;
-const JETTON_MASTER = new Address(0, Buffer.alloc(32, 3));
 const farFuture = () => BigInt(Math.floor(Date.now() / 1000) + 3600);
 const pub = (kp: KeyPair) => BigInt('0x' + kp.publicKey.toString('hex'));
 
@@ -82,6 +82,7 @@ describe('vouchers are bound to the network (X-2)', () => {
             creator: SandboxContract<TreasuryContract>;
             member: SandboxContract<TreasuryContract>;
             jettonWallet: SandboxContract<TreasuryContract>; // stands in for the pool's jetton wallet
+            jettonMaster: SandboxContract<TreasuryContract>; // answers the pool's TEP-89 request
         };
 
         async function network(globalId: number): Promise<Net> {
@@ -91,11 +92,12 @@ describe('vouchers are bound to the network (X-2)', () => {
             const creator = await bc.treasury('creator');
             const member = await bc.treasury('member');
             const jettonWallet = await bc.treasury('jettonWallet');
+            const jettonMaster = await bc.treasury('jettonMaster');
             const master = bc.openContract(await DistributorMaster.fromInit(owner.address, pub(backend)));
             await master.send(owner.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
             await master.send(creator.getSender(), { value: toNano('0.3') }, { $$type: 'CreatePool', chatId: CHAT_ID });
             const pool = bc.openContract(ChatPool.fromAddress(await master.getPoolAddress(CHAT_ID)));
-            return { bc, globalId, master, pool, creator, member, jettonWallet };
+            return { bc, globalId, master, pool, creator, member, jettonWallet, jettonMaster };
         }
 
         function adminVoucher(net: Net) {
@@ -120,14 +122,31 @@ describe('vouchers are bound to the network (X-2)', () => {
             );
         }
 
+        // RegisterJetton (TEP-89): the treasury playing the master answers
+        async function registerJetton(net: Net) {
+            const req = await net.pool.send(
+                net.creator.getSender(),
+                { value: toNano('0.1') },
+                { $$type: 'RegisterJetton', jettonMaster: net.jettonMaster.address },
+            );
+            const q = provideWalletQuery(req, net.pool.address, net.jettonMaster.address)!;
+            await net.jettonMaster.send({
+                to: net.pool.address,
+                value: toNano('0.05'),
+                body: takeWalletAddressBody(q.queryId, net.jettonWallet.address),
+            });
+            expect((await net.pool.getJettonWallet(net.jettonMaster.address))!.equals(net.jettonWallet.address)).toBe(
+                true,
+            );
+        }
+
         function deposit(net: Net, amount: bigint, globalId: number) {
             const v = beginCell()
                 .store(
                     storeDepositVoucher({
                         $$type: 'DepositVoucher',
                         chatId: CHAT_ID,
-                        jettonMaster: JETTON_MASTER,
-                        expectedJettonWallet: net.jettonWallet.address,
+                        jettonMaster: net.jettonMaster.address,
                         expiry: farFuture(),
                     }),
                 )
@@ -153,7 +172,7 @@ describe('vouchers are bound to the network (X-2)', () => {
                         $$type: 'ClaimVoucher',
                         chatId: CHAT_ID,
                         recipient: net.member.address,
-                        jettonMaster: JETTON_MASTER,
+                        jettonMaster: net.jettonMaster.address,
                         amount,
                         nonce,
                         expiry: farFuture(),
@@ -224,12 +243,13 @@ describe('vouchers are bound to the network (X-2)', () => {
             const v = adminVoucher(mainnet);
             await setAdmin(mainnet, v, signForNetwork(v, backend, TAG.Admin, mainnet.pool.address, MAINNET));
             expect(await mainnet.pool.getPoolAdmin()).not.toBeNull();
+            await registerJetton(mainnet);
 
             // a testnet deposit voucher is refunded: nothing is credited
             await deposit(mainnet, toNano('1000'), TESTNET);
-            expect(await mainnet.pool.getBalanceOf(JETTON_MASTER)).toEqual(0n);
+            expect(await mainnet.pool.getBalanceOf(mainnet.jettonMaster.address)).toEqual(0n);
             await deposit(mainnet, toNano('1000'), MAINNET);
-            expect(await mainnet.pool.getBalanceOf(JETTON_MASTER)).toEqual(toNano('1000'));
+            expect(await mainnet.pool.getBalanceOf(mainnet.jettonMaster.address)).toEqual(toNano('1000'));
 
             // a testnet claim voucher pays nothing out on mainnet
             const replay = await claim(mainnet, toNano('50'), 1n, TESTNET);
@@ -250,7 +270,7 @@ describe('vouchers are bound to the network (X-2)', () => {
                 to: mainnet.jettonWallet.address,
                 success: true,
             });
-            expect(await mainnet.pool.getBalanceOf(JETTON_MASTER)).toEqual(toNano('950'));
+            expect(await mainnet.pool.getBalanceOf(mainnet.jettonMaster.address)).toEqual(toNano('950'));
         });
     });
 

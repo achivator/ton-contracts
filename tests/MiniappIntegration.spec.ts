@@ -5,6 +5,13 @@ import { TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
 import {
     ChatPool,
     storeAdminInitVoucher,
+    storeAdminProposalVoucher,
+    storeCancelAdminProposal,
+    storeExecuteAdminProposal,
+    storeProposeAdmin,
+    storeRegisterJetton,
+    storeSweepUntracked,
+    storeWithdrawTon,
     storeClaim,
     storeClaimVoucher,
     storeCreatePool,
@@ -19,7 +26,7 @@ import {
 } from '../wrappers/ChatPool';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
 import '@ton/test-utils';
-import { signLegacyVoucher } from '../wrappers/Vouchers';
+import { depositVoucherCell, signLegacyVoucher } from '../wrappers/Vouchers';
 import { globalIdOf, signVoucher, TAG } from './helpers/vouchers';
 
 // The miniapp signs and builds all wire cells with miniapp/src/lib/ton/vouchers.js
@@ -120,13 +127,14 @@ describe('miniapp lib <-> contracts', () => {
         const expectedJettonWallet = await minter.getGetWalletAddress(creator.address);
 
         // Deposit voucher.
+        // Deposit voucher, v3 layout: no wallet (the pool credits only its
+        // TEP-89-registered one), whatever the caller passes.
         const genDeposit = beginCell()
             .store(
                 storeDepositVoucher({
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster,
-                    expectedJettonWallet,
                     expiry: FAR_FUTURE,
                 }),
             )
@@ -136,8 +144,33 @@ describe('miniapp lib <-> contracts', () => {
             jettonMaster,
             expectedJettonWallet,
             expiry: FAR_FUTURE,
+            version: 3,
         });
         expect(boc(libDeposit)).toEqual(boc(genDeposit));
+        // v2 pools keep int64 chatId, address jettonMaster, address
+        // expectedJettonWallet, uint64 expiry (the scripts' builder agrees)
+        const libDepositV2 = voucherLib.buildDepositVoucherCell({
+            chatId: CHAT_ID,
+            jettonMaster,
+            expectedJettonWallet,
+            expiry: FAR_FUTURE,
+            version: 2,
+        });
+        expect(boc(libDepositV2)).toEqual(
+            boc(depositVoucherCell(2, { chatId: CHAT_ID, jettonMaster, expectedJettonWallet, expiry: FAR_FUTURE })),
+        );
+        expect(boc(libDeposit)).toEqual(
+            boc(depositVoucherCell(3, { chatId: CHAT_ID, jettonMaster, expiry: FAR_FUTURE })),
+        );
+        // the layout is never guessed
+        expect(() =>
+            voucherLib.buildDepositVoucherCell({
+                chatId: CHAT_ID,
+                jettonMaster,
+                expectedJettonWallet,
+                expiry: FAR_FUTURE,
+            }),
+        ).toThrow();
 
         // Claim voucher.
         const genClaimVoucher = beginCell()
@@ -169,6 +202,7 @@ describe('miniapp lib <-> contracts', () => {
         expect(BigInt(tags.Deposit)).toEqual(TAG.Deposit);
         expect(BigInt(tags.Claim)).toEqual(TAG.Claim);
         expect(BigInt(tags.Admin)).toEqual(TAG.Admin);
+        expect(BigInt(tags.AdminProposal)).toEqual(TAG.AdminProposal);
         expect(BigInt(tags.Register)).toEqual(TAG.Register);
         expect(BigInt(tags.Mint)).toEqual(TAG.Mint);
         const target = master.address;
@@ -331,7 +365,6 @@ describe('miniapp lib <-> contracts', () => {
                     $$type: 'DepositVoucher',
                     chatId: NEGATIVE_CHAT_ID,
                     jettonMaster,
-                    expectedJettonWallet,
                     expiry: FAR_FUTURE,
                 }),
             )
@@ -339,10 +372,54 @@ describe('miniapp lib <-> contracts', () => {
         const libNegDeposit = voucherLib.buildDepositVoucherCell({
             chatId: NEGATIVE_CHAT_ID,
             jettonMaster,
-            expectedJettonWallet,
             expiry: FAR_FUTURE,
+            version: 3,
         });
         expect(boc(libNegDeposit)).toEqual(boc(genNegDeposit));
+
+        // v3 pool messages: registration, sweeps, TON, admin recovery
+        const gen = (store: (b: any) => void) => boc(beginCell().store(store).endCell());
+        expect(boc(voucherLib.buildRegisterJettonBody(jettonMaster))).toEqual(
+            gen(storeRegisterJetton({ $$type: 'RegisterJetton', jettonMaster })),
+        );
+        expect(boc(voucherLib.buildSweepUntrackedBody({ jettonMaster, amount: AMOUNT, to: creator.address }))).toEqual(
+            gen(storeSweepUntracked({ $$type: 'SweepUntracked', jettonMaster, amount: AMOUNT, to: creator.address })),
+        );
+        expect(boc(voucherLib.buildWithdrawTonBody({ to: creator.address, amount: AMOUNT }))).toEqual(
+            gen(storeWithdrawTon({ $$type: 'WithdrawTon', to: creator.address, amount: AMOUNT })),
+        );
+        const libProposal = voucherLib.buildAdminProposalVoucherCell({
+            chatId: NEGATIVE_CHAT_ID,
+            newAdmin: client.address,
+            seq: 3n,
+            expiry: FAR_FUTURE,
+        });
+        expect(boc(libProposal)).toEqual(
+            gen(
+                storeAdminProposalVoucher({
+                    $$type: 'AdminProposalVoucher',
+                    chatId: NEGATIVE_CHAT_ID,
+                    newAdmin: client.address,
+                    seq: 3n,
+                    expiry: FAR_FUTURE,
+                }),
+            ),
+        );
+        expect(boc(voucherLib.buildProposeAdminBody({ voucherCell: libProposal, signature: libSignature }))).toEqual(
+            gen(
+                storeProposeAdmin({
+                    $$type: 'ProposeAdmin',
+                    voucherCell: libProposal,
+                    signature: beginCell().storeBuffer(libSignature).endCell(),
+                }),
+            ),
+        );
+        expect(boc(voucherLib.buildCancelAdminProposalBody())).toEqual(
+            gen(storeCancelAdminProposal({ $$type: 'CancelAdminProposal' })),
+        );
+        expect(boc(voucherLib.buildExecuteAdminProposalBody())).toEqual(
+            gen(storeExecuteAdminProposal({ $$type: 'ExecuteAdminProposal' })),
+        );
 
         const genNegCreate = beginCell()
             .store(storeCreatePool({ $$type: 'CreatePool', chatId: NEGATIVE_CHAT_ID }))
@@ -415,6 +492,18 @@ describe('miniapp lib <-> contracts', () => {
         expect(limitRes.transactions).toHaveTransaction({ from: creator.address, to: pool.address, success: true });
         expect(await pool.getClaimLimit(minter.address)).toEqual(AMOUNT);
 
+        // --- 1c. the admin registers the chat's jetton (TEP-89): the pool asks
+        // the minter for its wallet, the only one it credits deposits from.
+        const registerRes = await blockchain.sendMessage(
+            rawInternal(
+                creator.address,
+                pool.address,
+                toNano('0.1'),
+                voucherLib.buildRegisterJettonBody(minter.address),
+            ),
+        );
+        expect(registerRes.transactions).toHaveTransaction({ from: minter.address, to: pool.address, success: true });
+
         // --- 2. deposit: lib-built voucher + forward payload + transfer body,
         // delivered as a raw message from the creator to their own jetton
         // wallet (what TON Connect produces in production).
@@ -426,6 +515,8 @@ describe('miniapp lib <-> contracts', () => {
             jettonMaster: minter.address,
             expectedJettonWallet: poolWalletAddr,
             expiry: FAR_FUTURE,
+            // as the miniapp route does: the pool's own version picks the layout
+            version: Number(await pool.getVersion()),
         });
         const depositSignature: Buffer = voucherLib.signVoucher(depositVoucher, BACKEND_SECRET_HEX, {
             tag: TAGS.Deposit,
@@ -576,5 +667,44 @@ describe('miniapp lib <-> contracts', () => {
         const creatorWallet = blockchain.openContract(TestJettonWallet.fromAddress(creatorWalletAddr));
         expect(await creatorWallet.getWalletBalance()).toEqual(toNano('1000') - AMOUNT + rest);
         expect(await pool.getBalanceOf(minter.address)).toEqual(0n);
+
+        // --- 7. admin recovery (what /api/admin-recovery and pool-admin-tx hand
+        // out): a lib-signed proposal for the client's wallet, cancelled by the
+        // admin, proposed again and executed after the 7-day timelock.
+        const propose = async () => {
+            const voucherCell = voucherLib.buildAdminProposalVoucherCell({
+                chatId: CHAT_ID,
+                newAdmin: client.address,
+                seq: await pool.getAdminProposalSeq(),
+                expiry: FAR_FUTURE,
+            });
+            const signature = voucherLib.signVoucher(voucherCell, BACKEND_SECRET_HEX, {
+                tag: TAGS.AdminProposal,
+                target: pool.address,
+                version: Number(await pool.getVersion()),
+                globalId: globalIdOf(blockchain),
+            });
+            return blockchain.sendMessage(
+                rawInternal(
+                    client.address,
+                    pool.address,
+                    toNano('0.05'),
+                    voucherLib.buildProposeAdminBody({ voucherCell, signature }),
+                ),
+            );
+        };
+        expect((await propose()).transactions).toHaveTransaction({ to: pool.address, success: true });
+        expect((await pool.getPendingAdmin())!.equals(client.address)).toBe(true);
+        await blockchain.sendMessage(
+            rawInternal(creator.address, pool.address, toNano('0.05'), voucherLib.buildCancelAdminProposalBody()),
+        );
+        expect(await pool.getPendingAdmin()).toBeNull();
+        expect((await propose()).transactions).toHaveTransaction({ to: pool.address, success: true });
+        blockchain.now = Number(await pool.getPendingAdminExecutableAt());
+        const exec = await blockchain.sendMessage(
+            rawInternal(client.address, pool.address, toNano('0.05'), voucherLib.buildExecuteAdminProposalBody()),
+        );
+        expect(exec.transactions).toHaveTransaction({ to: pool.address, success: true });
+        expect((await pool.getPoolAdmin())!.equals(client.address)).toBe(true);
     });
 });

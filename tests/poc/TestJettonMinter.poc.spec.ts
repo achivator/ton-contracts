@@ -53,10 +53,17 @@ describe('TestJettonMinter PoC', () => {
     // about minted tokens. (The mint excess now goes to the payer, not the pool.)
     it('TJM-6: Mint straight to a ChatPool credits its jetton wallet with no ledger entry', async () => {
         const backend = keyPairFromSeed(Buffer.alloc(32, 7));
-        const pool = blockchain.openContract(
-            await ChatPool.fromInit(owner.address, 1n, BigInt('0x' + backend.publicKey.toString('hex'))),
+        // owner plays the master: InitPool deploys and initialises the pool
+        const pool = blockchain.openContract(await ChatPool.fromInit(owner.address, 1n));
+        await pool.send(
+            owner.getSender(),
+            { value: toNano('0.15') },
+            {
+                $$type: 'InitPool',
+                backendPubKey: BigInt('0x' + backend.publicKey.toString('hex')),
+                excessTo: owner.address,
+            },
         );
-        await pool.send(owner.getSender(), { value: toNano('0.1') }, { $$type: 'Deploy', queryId: 0n });
         const r = await minter.send(
             owner.getSender(),
             { value: toNano('0.3') },

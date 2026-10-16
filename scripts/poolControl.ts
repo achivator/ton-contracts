@@ -10,6 +10,13 @@ import { confirmSend, lastTxLt } from './actors';
 //   MODE=limit  JETTON_MASTER, AMOUNT   daily claim budget in whole tokens
 //                                       (9 decimals; 0 = default 10%/day)
 //   MODE=key    BACKEND_PUBLIC_KEY      move the pool to a new backend key
+//   MODE=register JETTON_MASTER         register the pool's wallet of a jetton
+//                                       (TEP-89; before its first deposit)
+//   MODE=sweep  JETTON_MASTER, AMOUNT, [TO]  move untracked jettons out
+//   MODE=ton    AMOUNT, [TO]            move the pool's TON above its reserve
+//   MODE=cancel-proposal                cancel a pending admin recovery
+//   MODE=execute-proposal               execute an admin recovery whose 7-day
+//                                       timelock is over (any wallet may)
 //
 // Pool admin safety controls. The connected wallet must be the pool admin.
 // They bound what a leaked backend key can do; see contracts/chat_pool.tact.
@@ -31,20 +38,69 @@ export async function run(provider: NetworkProvider) {
             await pool.send(provider.sender(), { value }, { $$type: 'SetClaimsPaused', paused: mode === 'pause' });
             break;
         case 'limit':
-            await pool.send(provider.sender(), { value }, {
-                $$type: 'SetClaimLimit',
-                jettonMaster: Address.parse(reqEnv('JETTON_MASTER')),
-                dailyLimit: toNano(reqEnv('AMOUNT')),
-            });
+            await pool.send(
+                provider.sender(),
+                { value },
+                {
+                    $$type: 'SetClaimLimit',
+                    jettonMaster: Address.parse(reqEnv('JETTON_MASTER')),
+                    dailyLimit: toNano(reqEnv('AMOUNT')),
+                },
+            );
             break;
         case 'key':
-            await pool.send(provider.sender(), { value }, {
-                $$type: 'SetPoolBackendKey',
-                backendPubKey: BigInt('0x' + reqEnv('BACKEND_PUBLIC_KEY').replace(/^0x/, '')),
-            });
+            await pool.send(
+                provider.sender(),
+                { value },
+                {
+                    $$type: 'SetPoolBackendKey',
+                    backendPubKey: BigInt('0x' + reqEnv('BACKEND_PUBLIC_KEY').replace(/^0x/, '')),
+                },
+            );
+            break;
+        case 'register':
+            await pool.send(
+                provider.sender(),
+                { value: toNano('0.1') },
+                {
+                    $$type: 'RegisterJetton',
+                    jettonMaster: Address.parse(reqEnv('JETTON_MASTER')),
+                },
+            );
+            break;
+        case 'sweep':
+            await pool.send(
+                provider.sender(),
+                { value: toNano('0.15') },
+                {
+                    $$type: 'SweepUntracked',
+                    jettonMaster: Address.parse(reqEnv('JETTON_MASTER')),
+                    amount: toNano(reqEnv('AMOUNT')),
+                    to: process.env.TO ? Address.parse(process.env.TO) : sender,
+                },
+            );
+            break;
+        case 'ton':
+            await pool.send(
+                provider.sender(),
+                { value },
+                {
+                    $$type: 'WithdrawTon',
+                    amount: toNano(reqEnv('AMOUNT')),
+                    to: process.env.TO ? Address.parse(process.env.TO) : sender,
+                },
+            );
+            break;
+        case 'cancel-proposal':
+            await pool.send(provider.sender(), { value }, { $$type: 'CancelAdminProposal' });
+            break;
+        case 'execute-proposal':
+            await pool.send(provider.sender(), { value }, { $$type: 'ExecuteAdminProposal' });
             break;
         default:
-            throw new Error(`Unknown MODE "${mode}" (pause | resume | limit | key)`);
+            throw new Error(
+                `Unknown MODE "${mode}" (pause | resume | limit | key | register | sweep | ton | cancel-proposal | execute-proposal)`,
+            );
     }
     console.log(`poolControl ${mode} sent to ${pool.address.toString()}`);
     await confirmSend(provider, sender, prevLt, `poolControl ${mode}`);

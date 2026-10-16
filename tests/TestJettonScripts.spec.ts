@@ -119,9 +119,9 @@ describe('test jetton scripts', () => {
         const admin = await blockchain.treasury('admin');
         await mintTo(minter.address, admin.address, 10_000_000n); // 10 tokens at 6 decimals
 
-        // The pool must exist and have an admin: the script reads its
-        // version() to pick the voucher envelope, and an adminless pool
-        // refunds every deposit.
+        // The pool must exist, have an admin and know the jetton: the script
+        // reads its version() to pick the voucher envelope, and a pool
+        // refunds deposits without an admin or from an unregistered wallet.
         const chatId = -1001234567890n;
         await master.send(deployer.getSender(), { value: toNano('0.2') }, { $$type: 'CreatePool', chatId });
         const pool = blockchain.openContract(ChatPool.fromAddress(await master.getPoolAddress(chatId)));
@@ -148,6 +148,13 @@ describe('test jetton scripts', () => {
             },
         );
         expect(setAdmin.transactions).toHaveTransaction({ to: pool.address, success: true });
+        // a v3 pool credits only wallets it registered the TEP-89 way
+        const register = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster: minter.address },
+        );
+        expect(register.transactions).toHaveTransaction({ from: minter.address, to: pool.address, success: true });
 
         process.env.MASTER_ADDRESS = master.address.toString();
         process.env.JETTON_MASTER = minter.address.toString();
