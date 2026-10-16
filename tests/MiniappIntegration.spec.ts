@@ -100,6 +100,7 @@ describe('miniapp lib <-> contracts', () => {
             { value: toNano('0.2') },
             {
                 $$type: 'Mint',
+                queryId: 0n,
                 amount: toNano('1000'),
                 recipient: creator.address,
             },

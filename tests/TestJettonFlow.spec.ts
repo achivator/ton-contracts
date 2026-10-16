@@ -58,6 +58,7 @@ describe('TestJetton flow', () => {
             { value: toNano('0.2') },
             {
                 $$type: 'Mint',
+                queryId: 0n,
                 amount: toNano('1000'),
                 recipient: admin.address,
             },
@@ -195,9 +196,9 @@ describe('TestJetton flow', () => {
             )
             .endCell();
 
-        // The cooperating test wallet unwraps the payload at the notification
-        // hop, so a stock-style delivery is simulated with a raw message from
-        // the pool's own jetton wallet address.
+        // A stock-style delivery, simulated with a raw message from the pool's
+        // own jetton wallet address (TestJettonWallet now forwards verbatim
+        // too; see the deposit test above).
         const msgCell = beginCell()
             .store(
                 storeMessage({
@@ -249,7 +250,7 @@ describe('TestJetton flow', () => {
         await minter.send(
             admin.getSender(),
             { value: toNano('0.2') },
-            { $$type: 'Mint', amount: toNano('500'), recipient: adminB.address },
+            { $$type: 'Mint', queryId: 0n, amount: toNano('500'), recipient: adminB.address },
         );
 
         const poolB = blockchain.openContract(

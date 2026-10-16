@@ -1,19 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-    Address,
-    beginCell,
-    Cell,
-    internal,
-    MessageRelaxed,
-    SendMode,
-    StateInit,
-} from '@ton/core';
+import { Address, beginCell, Cell, internal, MessageRelaxed, SendMode, StateInit } from '@ton/core';
 import { WalletContractV4 } from '@ton/ton';
 import { mnemonicToPrivateKey } from '@ton/crypto';
 import { NetworkProvider } from '@ton/blueprint';
 import { reqEnv } from './env';
-import { TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
+import { jettonWalletAddress, jettonWalletBalance } from './jetton';
 
 // Test-actor plumbing shared by the multi-actor E2E scenario scripts.
 // The .env.test-actors file lives next to .env and is gitignored; it holds
@@ -166,25 +158,13 @@ export async function sendFromWallet(
     return { address: wallet.address, prevLt };
 }
 
-export async function jettonWalletOf(
-    provider: NetworkProvider,
-    minter: Address,
-    owner: Address,
-): Promise<Address> {
-    const m = provider.open(TestJettonMinter.fromAddress(minter));
-    return m.getGetWalletAddress(owner);
+export async function jettonWalletOf(provider: NetworkProvider, minter: Address, owner: Address): Promise<Address> {
+    return jettonWalletAddress(provider, minter, owner);
 }
 
-export async function jettonBalanceOf(
-    provider: NetworkProvider,
-    minter: Address,
-    owner: Address,
-): Promise<bigint> {
-    try {
-        const w = await jettonWalletOf(provider, minter, owner);
-        const wallet = provider.open(TestJettonWallet.fromAddress(w));
-        return await wallet.getWalletBalance();
-    } catch {
-        return 0n;
-    }
+// Jetton balance via the standard get_wallet_data, so it works for any
+// TEP-74 jetton. 0 only for a wallet that is not deployed yet; errors
+// propagate instead of masquerading as an empty wallet.
+export async function jettonBalanceOf(provider: NetworkProvider, minter: Address, owner: Address): Promise<bigint> {
+    return jettonWalletBalance(provider, await jettonWalletOf(provider, minter, owner));
 }
