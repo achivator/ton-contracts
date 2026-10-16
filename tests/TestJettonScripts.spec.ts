@@ -4,6 +4,9 @@ import { keyPairFromSeed } from '@ton/crypto';
 import '@ton/test-utils';
 import { TestJettonMinter } from '../wrappers/TestJetton';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
+import { ChatPool, storeAdminInitVoucher } from '../wrappers/ChatPool';
+import { globalIdOf, setGlobalId, signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { GLOBAL_ID } from '../wrappers/Vouchers';
 import { run as deployTestJetton } from '../scripts/deployTestJetton';
 import { run as mintTestJetton } from '../scripts/mintTestJetton';
 import { run as deposit } from '../scripts/deposit';
@@ -105,6 +108,9 @@ describe('test jetton scripts', () => {
 
     it('deposit scales AMOUNT by the decimals in get_jetton_data', async () => {
         const backend = keyPairFromSeed(Buffer.alloc(32, 7));
+        // the script signs for the blueprint network (testnet here), so the
+        // sandbox must run testnet's global id for the pool to accept it
+        setGlobalId(blockchain, GLOBAL_ID.testnet);
         const master = blockchain.openContract(
             await DistributorMaster.fromInit(deployer.address, BigInt('0x' + backend.publicKey.toString('hex'))),
         );
@@ -112,6 +118,43 @@ describe('test jetton scripts', () => {
         const minter = await deployMinter('6');
         const admin = await blockchain.treasury('admin');
         await mintTo(minter.address, admin.address, 10_000_000n); // 10 tokens at 6 decimals
+
+        // The pool must exist, have an admin and know the jetton: the script
+        // reads its version() to pick the voucher envelope, and a pool
+        // refunds deposits without an admin or from an unregistered wallet.
+        const chatId = -1001234567890n;
+        await master.send(deployer.getSender(), { value: toNano('0.2') }, { $$type: 'CreatePool', chatId });
+        const pool = blockchain.openContract(ChatPool.fromAddress(await master.getPoolAddress(chatId)));
+        const adminVoucher = beginCell()
+            .store(
+                storeAdminInitVoucher({
+                    $$type: 'AdminInitVoucher',
+                    chatId,
+                    master: master.address,
+                    admin: admin.address,
+                    expiry: BigInt(Math.floor(Date.now() / 1000) + 3600),
+                }),
+            )
+            .endCell();
+        const setAdmin = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.05') },
+            {
+                $$type: 'SetAdmin',
+                voucherCell: adminVoucher,
+                signature: signatureCell(
+                    signVoucher(adminVoucher, backend, TAG.Admin, pool.address, globalIdOf(blockchain)),
+                ),
+            },
+        );
+        expect(setAdmin.transactions).toHaveTransaction({ to: pool.address, success: true });
+        // a v3 pool credits only wallets it registered the TEP-89 way
+        const register = await pool.send(
+            admin.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster: minter.address },
+        );
+        expect(register.transactions).toHaveTransaction({ from: minter.address, to: pool.address, success: true });
 
         process.env.MASTER_ADDRESS = master.address.toString();
         process.env.JETTON_MASTER = minter.address.toString();
@@ -125,8 +168,9 @@ describe('test jetton scripts', () => {
         expect(body.loadUint(32)).toEqual(OP.transfer);
         body.loadUintBig(64);
         expect(body.loadCoins()).toEqual(2_500_000n);
-        const poolWallet = await minter.getGetWalletAddress(await master.getPoolAddress(-1001234567890n));
+        const poolWallet = await minter.getGetWalletAddress(pool.address);
         expect(await jettonBalance(blockchain, poolWallet)).toEqual(2_500_000n);
+        expect(await pool.getBalanceOf(minter.address)).toEqual(2_500_000n);
     }, 30_000);
 
     it('decimals: TEP-64 default of 9, off-chain metadata needs JETTON_DECIMALS, no silent rounding', () => {

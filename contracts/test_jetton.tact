@@ -80,16 +80,15 @@ message(0x7bdd97de) JettonBurnNotification {
 // provide_wallet_address query_id:uint64 owner_address:MsgAddress include_address:Bool
 // The owner is parsed by hand: an owner the minter cannot resolve (e.g. a
 // masterchain address) must be answered with addr_none, not an exception.
-message(0x2c76b973) ProvideWalletAddress {
+// Hence its own type: ProvideWalletAddress (distributor_messages.tact) has
+// the same opcode and wire layout, but parses the owner strictly.
+message(0x2c76b973) ProvideWalletAddressRaw {
     queryId: Int as uint64;
     ownerAndFlag: Slice as remaining;
 }
 
-message(0xd1735400) TakeWalletAddress {
-    queryId: Int as uint64;
-    walletAddress: Address?;             // addr_none if the owner is not resolvable
-    ownerAddress: Cell?;                 // ^MsgAddress, if include_address was set
-}
+// take_wallet_address (0xd1735400): TakeWalletAddress in
+// distributor_messages.tact, the reply ChatPool registers its wallet from.
 
 // ---- TestJettonMinter admin messages (not part of TEP-74) ----
 message(0x4d494e54) Mint {               // "MINT"
@@ -202,7 +201,7 @@ contract TestJettonMinter with Deployable, OwnableTransferable {
     }
 
     // TEP-89 wallet discovery.
-    receive(msg: ProvideWalletAddress) {
+    receive(msg: ProvideWalletAddressRaw) {
         let ctx: Context = context();
         nativeThrowUnless(ErrProvideValueTooLow, ctx.value > ctx.readForwardFee() + ProvideAddressGasConsumption);
         let s: Slice = msg.ownerAndFlag;

@@ -1,0 +1,7 @@
+;; Smallest key of a dictionary with `key_len`-bit unsigned keys, or -1 when
+;; the dictionary is empty. Tact 1.2 cannot iterate maps: ChatPool prunes its
+;; oldest claim-nonce entries with this (contracts/chat_pool.tact).
+int __achivator_udict_min_key(cell dict, int key_len) inline {
+    (int key, slice value, int found) = dict.udict_get_min?(key_len);
+    return found ? key : -1;
+}

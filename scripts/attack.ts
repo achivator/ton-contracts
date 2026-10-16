@@ -6,13 +6,13 @@ import {
     storeAdminInitVoucher,
     storeClaim,
     storeClaimVoucher,
-    storeDepositVoucher,
     storeJettonTransfer,
     storeJettonTransferNotification,
     storeSetAdmin,
 } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
-import { signVoucher, TAG } from '../wrappers/Vouchers';
+import { depositVoucherCell, TAG } from '../wrappers/Vouchers';
+import { contractVersion, voucherSignerFor } from './network';
 import { confirmSend, jettonWalletOf, lastTxLt, sleep } from './actors';
 import { reqEnv } from './env';
 
@@ -44,12 +44,12 @@ export async function run(provider: NetworkProvider) {
     const sender = provider.sender().address;
     if (!sender) throw new Error('Sender address is not defined');
     const recipient = process.env.RECIPIENT ? Address.parse(process.env.RECIPIENT) : sender;
-    const expiry = process.env.EXPIRY
-        ? BigInt(process.env.EXPIRY)
-        : BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const expiry = process.env.EXPIRY ? BigInt(process.env.EXPIRY) : BigInt(Math.floor(Date.now() / 1000) + 3600);
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
+    // the envelope the pool's version asks for, on this network
+    const signFor = await voucherSignerFor(provider, poolAddr);
     const pool = provider.open(ChatPool.fromAddress(poolAddr));
     const poolJw = await jettonWalletOf(provider, jettonMaster, poolAddr);
 
@@ -67,8 +67,12 @@ export async function run(provider: NetworkProvider) {
                 }),
             )
             .endCell();
-        const signature = beginCell().storeBuffer(signVoucher(voucher, sigKp, TAG.Claim, poolAddr)).endCell();
-        return beginCell().store(storeClaim({ $$type: 'Claim', voucherCell: voucher, signature })).endCell();
+        const signature = beginCell()
+            .storeBuffer(signFor(voucher, sigKp, TAG.Claim))
+            .endCell();
+        return beginCell()
+            .store(storeClaim({ $$type: 'Claim', voucherCell: voucher, signature }))
+            .endCell();
     };
 
     const prevLt = await lastTxLt(provider, sender);
@@ -100,7 +104,7 @@ export async function run(provider: NetworkProvider) {
                     }),
                 )
                 .endCell();
-            const signature = signVoucher(voucher, kp, TAG.Claim, poolAddr);
+            const signature = signFor(voucher, kp, TAG.Claim);
             const submitted = beginCell()
                 .store(
                     storeClaimVoucher({
@@ -152,18 +156,13 @@ export async function run(provider: NetworkProvider) {
         }
         case 'fake_notify': {
             const amount = toNano(reqEnv('AMOUNT'));
-            const voucher = beginCell()
-                .store(
-                    storeDepositVoucher({
-                        $$type: 'DepositVoucher',
-                        chatId,
-                        jettonMaster,
-                        expectedJettonWallet: poolJw,
-                        expiry,
-                    }),
-                )
-                .endCell();
-            const signature = signVoucher(voucher, kp, TAG.Deposit, poolAddr);
+            const voucher = depositVoucherCell(await contractVersion(provider, poolAddr), {
+                chatId,
+                jettonMaster,
+                expectedJettonWallet: poolJw,
+                expiry,
+            });
+            const signature = signFor(voucher, kp, TAG.Deposit);
             const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
             const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
             const body = beginCell()
@@ -206,14 +205,16 @@ export async function run(provider: NetworkProvider) {
         case 'withdraw': {
             const amount = toNano(reqEnv('AMOUNT'));
             const to = process.env.TO ? Address.parse(process.env.TO) : sender;
-            await pool.send(provider.sender(), { value: toNano('0.15') }, { $$type: 'WithdrawRemainder', jettonMaster, amount, to });
+            await pool.send(
+                provider.sender(),
+                { value: toNano('0.15') },
+                { $$type: 'WithdrawRemainder', jettonMaster, amount, to },
+            );
             break;
         }
         case 'set_admin': {
             const namedAdmin = process.env.ADMIN ? Address.parse(process.env.ADMIN) : sender;
-            const signKp = process.env.SIG_KEY === 'foreign'
-                ? keyPairFromSeed(Buffer.alloc(32, 7))
-                : kp;
+            const signKp = process.env.SIG_KEY === 'foreign' ? keyPairFromSeed(Buffer.alloc(32, 7)) : kp;
             const voucher = beginCell()
                 .store(
                     storeAdminInitVoucher({
@@ -225,7 +226,9 @@ export async function run(provider: NetworkProvider) {
                     }),
                 )
                 .endCell();
-            const signature = beginCell().storeBuffer(signVoucher(voucher, signKp, TAG.Admin, poolAddr)).endCell();
+            const signature = beginCell()
+                .storeBuffer(signFor(voucher, signKp, TAG.Admin))
+                .endCell();
             const body = beginCell()
                 .store(storeSetAdmin({ $$type: 'SetAdmin', voucherCell: voucher, signature }))
                 .endCell();

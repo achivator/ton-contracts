@@ -1,9 +1,10 @@
 import { Address, beginCell, toNano } from '@ton/core';
 import { keyPairFromSeed, sign } from '@ton/crypto';
 import { DistributorMaster } from '../wrappers/DistributorMaster';
-import { storeDepositVoucher, storeJettonTransfer } from '../wrappers/ChatPool';
+import { ChatPool, storeJettonTransfer } from '../wrappers/ChatPool';
 import { NetworkProvider } from '@ton/blueprint';
-import { signVoucher, TAG } from '../wrappers/Vouchers';
+import { depositVoucherCell, TAG } from '../wrappers/Vouchers';
+import { contractVersion, voucherSignerFor } from './network';
 import { reqEnv } from './env';
 import { confirmSend, lastTxLt } from './actors';
 import { jettonDecimals, jettonWalletAddress as jettonWalletOf, parseJettonAmount } from './jetton';
@@ -14,7 +15,8 @@ import { jettonDecimals, jettonWalletAddress as jettonWalletOf, parseJettonAmoun
 //
 // Acts as the chat admin: sends a jetton transfer from the admin's own jetton
 // wallet to the pool, carrying a backend-signed DepositVoucher in the forward
-// payload.
+// payload. A v3 pool credits it only from its admin and only through a
+// registered wallet: register the jetton first (poolControl MODE=register).
 export async function run(provider: NetworkProvider) {
     const masterAddr = Address.parse(reqEnv('MASTER_ADDRESS'));
     const jettonMaster = Address.parse(reqEnv('JETTON_MASTER'));
@@ -27,23 +29,29 @@ export async function run(provider: NetworkProvider) {
 
     const master = provider.open(DistributorMaster.fromAddress(masterAddr));
     const poolAddr = await master.getPoolAddress(chatId);
+    // the envelope the pool's version asks for, on this network
+    const signFor = await voucherSignerFor(provider, poolAddr);
 
     const expectedJettonWallet = await jettonWalletOf(provider, jettonMaster, poolAddr);
     const adminJettonWallet = await jettonWalletOf(provider, jettonMaster, admin);
 
+    const version = await contractVersion(provider, poolAddr);
+    if (version >= 3) {
+        const pool = provider.open(ChatPool.fromAddress(poolAddr));
+        const registered = await pool.getJettonWallet(jettonMaster);
+        // sent anyway (the e2e scenario checks the refunds), but say why
+        if (!registered || !registered.equals(expectedJettonWallet)) {
+            console.warn('The pool has not registered this jetton (poolControl MODE=register): it will refund.');
+        }
+        const poolAdmin = await pool.getPoolAdmin();
+        if (!poolAdmin || !poolAdmin.equals(admin)) {
+            console.warn('Only the pool admin can deposit: this deposit will be refunded.');
+        }
+    }
+
     const expiry = BigInt(Math.floor(Date.now() / 1000) + 3600);
-    const voucher = beginCell()
-        .store(
-            storeDepositVoucher({
-                $$type: 'DepositVoucher',
-                chatId,
-                jettonMaster,
-                expectedJettonWallet,
-                expiry,
-            }),
-        )
-        .endCell();
-    const signature = signVoucher(voucher, kp, TAG.Deposit, poolAddr);
+    const voucher = depositVoucherCell(version, { chatId, jettonMaster, expectedJettonWallet, expiry });
+    const signature = signFor(voucher, kp, TAG.Deposit);
     // The 513-bit payload (voucher ref + 512-bit signature) cannot ride inline
     // in a transfer body (two addresses + fixed fields leave no room), so it
     // travels ref-wrapped as [1 bit][ref payload]. ChatPool accepts both this

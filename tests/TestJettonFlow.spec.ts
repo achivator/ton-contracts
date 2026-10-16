@@ -2,9 +2,15 @@ import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox';
 import { beginCell, storeMessage, toNano } from '@ton/core';
 import { keyPairFromSeed, KeyPair, sign } from '@ton/crypto';
 import { TestJettonMinter, TestJettonWallet } from '../wrappers/TestJetton';
-import { ChatPool, storeAdminInitVoucher, storeClaimVoucher, storeDepositVoucher, storeJettonTransferNotification } from '../wrappers/ChatPool';
+import {
+    ChatPool,
+    storeAdminInitVoucher,
+    storeClaimVoucher,
+    storeDepositVoucher,
+    storeJettonTransferNotification,
+} from '../wrappers/ChatPool';
 import '@ton/test-utils';
-import { signatureCell, signVoucher, TAG } from './helpers/vouchers';
+import { globalIdOf, signatureCell, signVoucher, TAG } from './helpers/vouchers';
 
 // End-to-end wiring test: real jetton minter -> real jetton wallets -> real
 // ChatPool, mirroring scripts/deployTestJetton.ts + scripts/deposit.ts byte
@@ -27,20 +33,7 @@ describe('TestJetton flow', () => {
         master = await blockchain.treasury('master');
         backend = keyPairFromSeed(Buffer.alloc(32, 7));
 
-        pool = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID, BigInt('0x' + backend.publicKey.toString('hex'))),
-        );
-        const depPool = await pool.send(
-            admin.getSender(),
-            { value: toNano('0.1') },
-            { $$type: 'Deploy', queryId: 0n },
-        );
-        expect(depPool.transactions).toHaveTransaction({
-            from: admin.address,
-            to: pool.address,
-            deploy: true,
-            success: true,
-        });
+        pool = await deployPool(CHAT_ID);
 
         const content = beginCell().storeUint(0, 8).storeStringTail('test').endCell();
         minter = blockchain.openContract(await TestJettonMinter.fromInit(admin.address, content));
@@ -51,14 +44,53 @@ describe('TestJetton flow', () => {
         );
         expect(depMinter.transactions).toHaveTransaction({ to: minter.address, deploy: true, success: true });
 
-        const mintRes = await minter.send(admin.getSender(), { value: toNano('0.2') }, {
-            $$type: 'Mint',
-            queryId: 0n,
-            amount: toNano('1000'),
-            recipient: admin.address,
-        });
+        const mintRes = await minter.send(
+            admin.getSender(),
+            { value: toNano('0.2') },
+            {
+                $$type: 'Mint',
+                queryId: 0n,
+                amount: toNano('1000'),
+                recipient: admin.address,
+            },
+        );
         expect(mintRes.transactions).toHaveTransaction({ to: minter.address, success: true });
     });
+
+    // What DistributorMaster.CreatePool sends (a treasury plays the master):
+    // the pool's StateInit with InitPool.
+    async function deployPool(chatId: bigint): Promise<SandboxContract<ChatPool>> {
+        const p = blockchain.openContract(await ChatPool.fromInit(master.address, chatId));
+        const res = await p.send(
+            master.getSender(),
+            { value: toNano('0.1') },
+            {
+                $$type: 'InitPool',
+                backendPubKey: BigInt('0x' + backend.publicKey.toString('hex')),
+                excessTo: admin.address,
+            },
+        );
+        expect(res.transactions).toHaveTransaction({
+            from: master.address,
+            to: p.address,
+            deploy: true,
+            success: true,
+        });
+        return p;
+    }
+
+    // RegisterJetton: the pool asks the test minter (TEP-89) for its wallet.
+    async function registerJetton(target: SandboxContract<ChatPool>, by: SandboxContract<TreasuryContract>) {
+        const res = await target.send(
+            by.getSender(),
+            { value: toNano('0.1') },
+            { $$type: 'RegisterJetton', jettonMaster: minter.address },
+        );
+        expect(res.transactions).toHaveTransaction({ from: minter.address, to: target.address, success: true });
+        expect(
+            (await target.getJettonWallet(minter.address))!.equals(await minter.getGetWalletAddress(target.address)),
+        ).toBe(true);
+    }
 
     async function setAdmin(
         target: SandboxContract<ChatPool>,
@@ -76,7 +108,9 @@ describe('TestJetton flow', () => {
                 }),
             )
             .endCell();
-        const signature = signatureCell(signVoucher(voucher, backend, TAG.Admin, target.address));
+        const signature = signatureCell(
+            signVoucher(voucher, backend, TAG.Admin, target.address, globalIdOf(blockchain)),
+        );
         return target.send(
             claimer.getSender(),
             { value: toNano('0.05') },
@@ -98,6 +132,7 @@ describe('TestJetton flow', () => {
 
     it('deposits through real wallets (reproduce testnet flow)', async () => {
         await setAdmin(pool, CHAT_ID, admin); // deposits are refunded until then
+        await registerJetton(pool, admin);
         const adminWalletAddr = await minter.getGetWalletAddress(admin.address);
         const poolWalletAddr = await minter.getGetWalletAddress(pool.address);
 
@@ -107,12 +142,11 @@ describe('TestJetton flow', () => {
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster: minter.address,
-                    expectedJettonWallet: poolWalletAddr,
                     expiry: farFuture,
                 }),
             )
             .endCell();
-        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address);
+        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address, globalIdOf(blockchain));
         const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
         const forwardPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
 
@@ -135,11 +169,21 @@ describe('TestJetton flow', () => {
 
         dump(res, 'deposit flow');
         expect(res.transactions).toHaveTransaction({ from: admin.address, to: adminWalletAddr, success: true });
-        expect(res.transactions).toHaveTransaction({ from: adminWalletAddr, to: poolWalletAddr, success: true, deploy: true });
+        expect(res.transactions).toHaveTransaction({
+            from: adminWalletAddr,
+            to: poolWalletAddr,
+            success: true,
+            deploy: true,
+        });
         expect(res.transactions).toHaveTransaction({ from: poolWalletAddr, to: pool.address, success: true });
         // no fee: nothing reaches the master, the forwarded TON comes back
         expect(res.transactions).not.toHaveTransaction({ from: pool.address, to: master.address });
-        expect(res.transactions).toHaveTransaction({ from: pool.address, to: admin.address, op: 0xd53276db, success: true });
+        expect(res.transactions).toHaveTransaction({
+            from: pool.address,
+            to: admin.address,
+            op: 0xd53276db,
+            success: true,
+        });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
@@ -148,6 +192,7 @@ describe('TestJetton flow', () => {
 
     it('accepts a verbatim ref-wrapped payload (stock wallet behavior)', async () => {
         await setAdmin(pool, CHAT_ID, admin);
+        await registerJetton(pool, admin);
         const poolWalletAddr = await minter.getGetWalletAddress(pool.address);
 
         const voucher = beginCell()
@@ -156,12 +201,11 @@ describe('TestJetton flow', () => {
                     $$type: 'DepositVoucher',
                     chatId: CHAT_ID,
                     jettonMaster: minter.address,
-                    expectedJettonWallet: poolWalletAddr,
                     expiry: farFuture,
                 }),
             )
             .endCell();
-        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address);
+        const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address, globalIdOf(blockchain));
         const payloadCell = beginCell().storeRef(voucher).storeBuffer(signature).endCell();
         // What a stock TEP-74 wallet forwards verbatim: [1 bit][ref payloadCell].
         const verbatimPayload = beginCell().storeUint(1, 1).storeRef(payloadCell).endCell();
@@ -211,7 +255,12 @@ describe('TestJetton flow', () => {
         });
         // no fee: nothing reaches the master, the forwarded TON comes back
         expect(res.transactions).not.toHaveTransaction({ from: pool.address, to: master.address });
-        expect(res.transactions).toHaveTransaction({ from: pool.address, to: admin.address, op: 0xd53276db, success: true });
+        expect(res.transactions).toHaveTransaction({
+            from: pool.address,
+            to: admin.address,
+            op: 0xd53276db,
+            success: true,
+        });
 
         expect(await pool.getBalanceOf(minter.address)).toEqual(AMOUNT);
         expect((await pool.getPoolAdmin())!.equals(admin.address)).toBe(true);
@@ -230,15 +279,7 @@ describe('TestJetton flow', () => {
             { $$type: 'Mint', queryId: 0n, amount: toNano('500'), recipient: adminB.address },
         );
 
-        const poolB = blockchain.openContract(
-            await ChatPool.fromInit(master.address, CHAT_ID_B, BigInt('0x' + backend.publicKey.toString('hex'))),
-        );
-        const depB = await poolB.send(
-            admin.getSender(),
-            { value: toNano('0.1') },
-            { $$type: 'Deploy', queryId: 0n },
-        );
-        expect(depB.transactions).toHaveTransaction({ to: poolB.address, deploy: true, success: true });
+        const poolB = await deployPool(CHAT_ID_B);
 
         async function depositTo(
             pool: SandboxContract<ChatPool>,
@@ -255,12 +296,11 @@ describe('TestJetton flow', () => {
                         $$type: 'DepositVoucher',
                         chatId,
                         jettonMaster: minter.address,
-                        expectedJettonWallet: await minter.getGetWalletAddress(pool.address),
                         expiry: farFuture,
                     }),
                 )
                 .endCell();
-            const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address);
+            const signature = signVoucher(voucher, backend, TAG.Deposit, pool.address, globalIdOf(blockchain));
             const forwardPayload = beginCell()
                 .storeUint(1, 1)
                 .storeRef(beginCell().storeRef(voucher).storeBuffer(signature).endCell())
@@ -302,7 +342,9 @@ describe('TestJetton flow', () => {
                     }),
                 )
                 .endCell();
-            const signature = signatureCell(signVoucher(voucher, backend, TAG.Claim, pool.address));
+            const signature = signatureCell(
+                signVoucher(voucher, backend, TAG.Claim, pool.address, globalIdOf(blockchain)),
+            );
             return pool.send(
                 recipient.getSender(),
                 { value: toNano('0.15') },
@@ -312,15 +354,24 @@ describe('TestJetton flow', () => {
 
         await setAdmin(pool, CHAT_ID, admin);
         await setAdmin(poolB, CHAT_ID_B, adminB);
+        await registerJetton(pool, admin);
+        await registerJetton(poolB, adminB);
         await depositTo(pool, CHAT_ID, admin, toNano('100'));
         await depositTo(poolB, CHAT_ID_B, adminB, toNano('500'));
         // lift the default 10%/day claim budget so the whole balance can move
-        for (const [p, a] of [[pool, admin], [poolB, adminB]] as const) {
-            await p.send(a.getSender(), { value: toNano('0.05') }, {
-                $$type: 'SetClaimLimit',
-                jettonMaster: minter.address,
-                dailyLimit: toNano('1000'),
-            });
+        for (const [p, a] of [
+            [pool, admin],
+            [poolB, adminB],
+        ] as const) {
+            await p.send(
+                a.getSender(),
+                { value: toNano('0.05') },
+                {
+                    $$type: 'SetClaimLimit',
+                    jettonMaster: minter.address,
+                    dailyLimit: toNano('1000'),
+                },
+            );
         }
 
         // Same jetton master feeds two pools; ledgers, admins and pool
