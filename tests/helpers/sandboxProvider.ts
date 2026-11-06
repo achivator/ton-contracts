@@ -25,7 +25,9 @@ export function sandboxProvider(
     const api = {
         isContractDeployed: isDeployed,
         getBalance: async (a: Address) => (await blockchain.getContract(a)).balance,
-        getTransactions: async (a: Address) => (a.equals(wallet.address) ? [{ lt: BigInt(sent.length) }] : []),
+        getContractState: async (a: Address) => ({
+            lastTransaction: a.equals(wallet.address) ? { lt: String(sent.length) } : null,
+        }),
     };
     const provider: NetworkProvider = {
         network: () => network,

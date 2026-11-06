@@ -87,8 +87,9 @@ bp() {
     env "$@" npx blueprint run "$script" \
         --custom "$RPC_URL" --custom-version v2 --custom-type testnet --mnemonic </dev/null 2>&1 \
         | strip_ansi | tee "$log"
-    # blueprint exits 0 even when a script throws: inspect the text instead
-    if grep -qE '(^|[^A-Za-z])(Error|Exception)(:|[[:space:]]|$)' "$log"; then
+    # blueprint exits 0 even when a script throws: inspect the text instead.
+    # The prefix also catches AxiosError, TypeError and the like.
+    if grep -qE '(^|[^A-Za-z])[A-Za-z]*(Error|Exception)(:|[[:space:]]|$)' "$log"; then
         die "blueprint run $script reported an error (log: $log)"
     fi
 }
