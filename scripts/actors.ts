@@ -90,13 +90,13 @@ export async function isDeployed(provider: NetworkProvider, addr: Address): Prom
     return acc.account.state.type !== 'uninit';
 }
 
+// The account's last transaction lt, from its state rather than its history:
+// nodes prune old blocks, so getTransactions fails with "lt not in db" for a
+// wallet whose last transaction is a few weeks old.
 export async function lastTxLt(provider: NetworkProvider, addr: Address): Promise<string> {
     const api: any = provider.api();
-    const txs = await api.getTransactions(addr, { limit: 1 });
-    if (!txs || txs.length === 0) {
-        return '0';
-    }
-    return txs[0].lt.toString();
+    const state = await api.getContractState(addr);
+    return state.lastTransaction?.lt?.toString() ?? '0';
 }
 
 // Polls the account's last-tx lt until it changes, so the next send from the

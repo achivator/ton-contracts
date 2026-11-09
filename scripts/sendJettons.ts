@@ -20,6 +20,25 @@ import { reqEnv } from './env';
 // amounts are 9-decimal jetton units). Idempotent.
 const ATTACH = toNano('0.12');
 
+// One top-up transfer, as the owner's jetton wallet receives it.
+export function distributionTransferBody(amount: bigint, destination: Address) {
+    return beginCell()
+        .store(
+            storeJettonTransfer({
+                $$type: 'JettonTransfer',
+                queryId: 0n,
+                amount,
+                destination,
+                responseDestination: destination,
+                customPayload: null,
+                forwardTonAmount: 0n,
+                // Either left: TEP-74 wallets reject a payload without this bit (exit 708)
+                forwardPayload: beginCell().storeBit(false).endCell(),
+            }),
+        )
+        .endCell();
+}
+
 export async function run(provider: NetworkProvider) {
     const ownerMnemonic = reqEnv('WALLET_MNEMONIC');
     const jettonMaster = Address.parse(reqEnv('JETTON_MASTER'));
@@ -74,20 +93,7 @@ export async function run(provider: NetworkProvider) {
     const messages: RawMessage[] = [];
     const pending: { name: string; jw: Address; prevLt: string }[] = [];
     for (const t of targets) {
-        const body = beginCell()
-            .store(
-                storeJettonTransfer({
-                    $$type: 'JettonTransfer',
-                    queryId: 0n,
-                    amount: t.delta,
-                    destination: t.addr,
-                    responseDestination: t.addr,
-                    customPayload: null,
-                    forwardTonAmount: 0n,
-                    forwardPayload: beginCell().endCell(),
-                }),
-            )
-            .endCell();
+        const body = distributionTransferBody(t.delta, t.addr);
         messages.push({ to: ownerJw, value: ATTACH, body, bounce: true });
         pending.push({ name: t.name, jw: t.jw, prevLt: await lastTxLt(provider, t.jw) });
         console.log(`JETTONS ${t.name} ${t.jw.toString()} delta=${t.delta}`);

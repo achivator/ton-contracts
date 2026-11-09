@@ -10,7 +10,8 @@ import { GLOBAL_ID } from '../wrappers/Vouchers';
 import { run as deployTestJetton } from '../scripts/deployTestJetton';
 import { run as mintTestJetton } from '../scripts/mintTestJetton';
 import { run as deposit } from '../scripts/deposit';
-import { jettonBalanceOf } from '../scripts/actors';
+import { distributionTransferBody } from '../scripts/sendJettons';
+import { jettonBalanceOf, lastTxLt } from '../scripts/actors';
 import { decimalsFromContent, parseJettonAmount } from '../scripts/jetton';
 import {
     buildOnchainContent,
@@ -104,6 +105,40 @@ describe('test jetton scripts', () => {
             const { provider } = sandboxProvider(blockchain, deployer);
             await expect(jettonBalanceOf(provider, notAJetton.address, deployer.address)).rejects.toThrow();
         });
+    });
+
+    it('lastTxLt reads the account state, so a wallet idle past node pruning still works', async () => {
+        const provider = {
+            api: () => ({
+                getTransactions: async () => {
+                    throw new Error('LITE_SERVER_UNKNOWN: cannot find block: lt not in db');
+                },
+                getContractState: async (a: Address) =>
+                    a.equals(deployer.address)
+                        ? { lastTransaction: { lt: '42', hash: 'x' } }
+                        : { lastTransaction: null },
+            }),
+        } as any;
+        const idle = await blockchain.treasury('idle');
+        expect(await lastTxLt(provider, deployer.address)).toEqual('42');
+        expect(await lastTxLt(provider, idle.address)).toEqual('0');
+    });
+
+    it('sendJettons builds a transfer that jetton wallets accept (Either bit)', async () => {
+        const minter = await deployMinter('9');
+        const alice = await blockchain.treasury('alice');
+        const bob = await blockchain.treasury('bob');
+        await mintTo(minter.address, alice.address, toNano('5'));
+        const aliceWallet = await minter.getGetWalletAddress(alice.address);
+
+        const res = await alice.send({
+            to: aliceWallet,
+            value: toNano('0.12'),
+            body: distributionTransferBody(toNano('2'), bob.address),
+        });
+
+        expect(res.transactions).toHaveTransaction({ from: alice.address, to: aliceWallet, success: true });
+        expect(await jettonBalance(blockchain, await minter.getGetWalletAddress(bob.address))).toEqual(toNano('2'));
     });
 
     it('deposit scales AMOUNT by the decimals in get_jetton_data', async () => {
